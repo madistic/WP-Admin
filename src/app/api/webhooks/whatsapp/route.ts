@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { getRestaurantByWhatsAppPhoneNumberId } from "@/lib/whatsapp/restaurant"
 
 /**
  * GET /api/webhooks/whatsapp
@@ -62,6 +63,19 @@ export async function POST(request: Request) {
         const phoneNumberId = value.metadata?.phone_number_id
         const displayPhoneNumber = value.metadata?.display_phone_number
 
+        if (!phoneNumberId) {
+          console.warn("[WhatsApp Webhook] Event missing metadata.phone_number_id")
+          continue
+        }
+
+        // Multi-Tenant Isolation Anchor: Look up restaurant using Meta's phone_number_id ONLY
+        const restaurant = await getRestaurantByWhatsAppPhoneNumberId(phoneNumberId)
+
+        if (!restaurant) {
+          console.warn(`[WhatsApp Webhook] Unknown phone_number_id: ${phoneNumberId}. Event safely rejected.`)
+          continue
+        }
+
         // Extract messages array if present
         const messages = Array.isArray(value.messages) ? value.messages : []
 
@@ -76,8 +90,10 @@ export async function POST(request: Request) {
             textBody = message?.text?.body
           }
 
-          // Sanitized logging
-          console.log("[WhatsApp Webhook] Event Received:", {
+          // Log resolved multi-tenant restaurant details securely
+          console.log("[WhatsApp Webhook] Event Received & Resolved to Restaurant:", {
+            restaurantId: restaurant.id,
+            restaurantName: restaurant.name,
             phoneNumberId,
             displayPhoneNumber,
             sender: from ? `***${from.slice(-4)}` : "unknown",
@@ -92,6 +108,7 @@ export async function POST(request: Request) {
         const statuses = Array.isArray(value.statuses) ? value.statuses : []
         for (const statusObj of statuses) {
           console.log("[WhatsApp Webhook] Status Update Received:", {
+            restaurantId: restaurant.id,
             status: statusObj?.status,
             recipientId: statusObj?.recipient_id ? `***${statusObj.recipient_id.slice(-4)}` : "unknown",
             messageId: statusObj?.id,
@@ -108,3 +125,4 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: "error_handled" }, { status: 200 })
   }
 }
+

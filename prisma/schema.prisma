@@ -22,9 +22,10 @@ model Restaurant {
   delivery_radius Float    @default(0)
   minimum_order   Float    @default(0)
   delivery_fee    Float    @default(0)
-  is_open         Boolean  @default(true)
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  whatsapp_phone_number_id String?  @unique
+  is_open                  Boolean  @default(true)
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
 
   users      User[]
   categories MenuCategory[]

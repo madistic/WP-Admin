@@ -166,6 +166,7 @@ model MenuItem {
   variants   MenuItemVariant[]
   addons     MenuItemAddon[]
   orderItems OrderItem[]
+  cartItems  WhatsAppCartItem[]
 }
 
 model MenuItemVariant {
@@ -272,3 +273,37 @@ model OrderStatusHistory {
 
   order Order @relation(fields: [order_id], references: [id], onDelete: Cascade)
 }
+
+model WhatsAppCart {
+  id                       String             @id @default(uuid())
+  restaurant_id            String
+  customer_whatsapp_number String
+  checkout_step            String?            // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION"
+  customer_name            String?
+  delivery_address         String?
+  created_at               DateTime           @default(now())
+  updated_at               DateTime           @updatedAt
+
+  items                    WhatsAppCartItem[]
+
+  @@unique([restaurant_id, customer_whatsapp_number])
+}
+
+model WhatsAppCartItem {
+  id                    String        @id @default(uuid())
+  cart_id               String
+  menu_item_id          String
+  variant_id            String?
+  selected_addons       String?       // JSON array string
+  quantity              Int           @default(1)
+  unit_price_snapshot   Float
+  item_name_snapshot    String
+  variant_name_snapshot String?
+  special_instructions  String?
+  created_at            DateTime      @default(now())
+  updated_at            DateTime      @updatedAt
+
+  cart                  WhatsAppCart  @relation(fields: [cart_id], references: [id], onDelete: Cascade)
+  menuItem              MenuItem      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+}
+

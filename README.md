@@ -3,95 +3,121 @@
 ## Current Status
 
 Current Phase:
-Meta WhatsApp Cloud API Multi-Tenant Integration
+Meta WhatsApp Cloud API Complete Ordering Flow (SPECIAL INSTRUCTION -> CART REVIEW -> CHECKOUT -> CREATE ORDER)
 
 Current Task:
-Multi-Tenant Restaurant Routing & Isolation Foundation
+WhatsApp Ordering Phase Complete
 
 Completed:
-- Schema Update: Added `whatsapp_phone_number_id String? @unique` field to the `Restaurant` model in `prisma/schema.prisma`.
-- Database Synchronization: Pushed schema changes to PostgreSQL and regenerated Prisma Client v7.9.1.
-- Multi-Tenant Service Helpers (`src/lib/whatsapp/restaurant.ts`):
-  - `getRestaurantByWhatsAppPhoneNumberId(phoneNumberId)`: Looks up restaurant strictly using Meta's `phone_number_id`. NEVER accepts `restaurant_id` from user payload or relies on sender phone number.
-  - `getOrCreateCustomerForRestaurant(restaurantId, whatsappNumber)`: Enforces `(restaurant_id, whatsapp_number)` scoping for customer records.
-- Webhook Routing (`src/app/api/webhooks/whatsapp/route.ts`): Connected `POST` handler to resolve incoming Meta `metadata.phone_number_id` to `restaurant.id`. Safely ignores/logs unknown `phone_number_id` payloads without crashing.
-- Multi-Tenant Automated Test Suite (`src/lib/whatsapp/tenant-test.ts`): Created automated test runner verifying 6 multi-tenant isolation scenarios (100% pass rate).
-- Production Build Verification: `npm run build` completed with 0 errors (`prisma generate && next build`).
+- Cart Schema Enhancements (`prisma/schema.prisma`): Added `checkout_step`, `customer_name`, and `delivery_address` to `WhatsAppCart`. Pushed to PostgreSQL database.
+- Special Instructions / Item Notes (`src/lib/whatsapp/cart.ts`): Supported optional customer instructions on cart items (e.g. `"note 1 extra spicy"`).
+- Cart Review & Formatting (`src/lib/whatsapp/cart.ts`): Formats item name, size/variants, add-ons, notes, subtotal, delivery fee, and totals.
+- Checkout & Order Creation Engine (`src/lib/whatsapp/cart.ts` & `src/lib/whatsapp/router.ts`):
+  - **Cart Safety & Validation**: Verifies all menu items exist, are active, available, and categories/variants are active before allowing checkout. Rejects unavailable items.
+  - **Customer Name & Delivery Address Collection**: Interactive text collection with state machine transitions (`AWAITING_ADDRESS` -> `AWAITING_CONFIRMATION`).
+  - **Server-Side Price Safety**: Re-reads current item/variant/add-on prices directly from PostgreSQL at order creation time. Recalculates subtotal and total server-side.
+  - **Tenant & Order Safety**: Strictly uses `restaurant_id` resolved from Meta `phone_number_id`.
+  - **Customer Reuse**: Reuses or creates `Customer` record for `(restaurant_id, phone)`.
+  - **DB Order Creation**: Creates `Order` with `source: WHATSAPP`, `payment_method: COD`, `payment_status: PENDING`, `status: NEW`. Creates `OrderItem` snapshots for every cart item.
+  - **Post-Order Cart Clearing**: Clears cart on successful order creation ONLY. Failed orders preserve cart items.
+- Order Creation Test Suite (`src/lib/whatsapp/order-flow-test.ts`): 10 comprehensive automated tests (100% pass rate).
+- Production Build Verification: `npm run build` passed with 0 errors (`prisma generate && next build`).
 
 In Progress:
 - None
 
 Next Task:
-- Phase 5: Cart Management, Order Flow & Interactive WhatsApp Menu Bot Handler
+- Completed WhatsApp Ordering Phase. Ready for production deployment!
 
 Files Created:
-- `src/lib/whatsapp/restaurant.ts`
-- `src/lib/whatsapp/tenant-test.ts`
+- `src/lib/whatsapp/cart.ts`
+- `src/lib/whatsapp/router.ts`
+- `src/lib/whatsapp/order-flow-test.ts`
+- `src/lib/whatsapp/cart-test.ts`
+- `src/lib/whatsapp/menu-browsing-test.ts`
 
 Files Modified:
 - `prisma/schema.prisma`
 - `src/app/api/webhooks/whatsapp/route.ts`
-- `package.json`
 - `README.md`
 
 Known Issues:
 - None
 
 Last Updated:
-2026-08-26
+2026-08-27
 
 ---
 
-## Architecture & Tenant Isolation
+## End-to-End WhatsApp Ordering Flow
 
 ```text
-Meta WhatsApp Cloud API Event
-            │
-            ▼
-`metadata.phone_number_id` (e.g. 1111111111111111)
-            │
-            ▼
-getRestaurantByWhatsAppPhoneNumberId(phoneNumberId)
-            │
-            ▼
-   Resolved `restaurant_id` (e.g. Sagar Hotel)
-            │
-  ┌─────────┴───────────────────────┬─────────────────────────┐
-  ▼                                 ▼                         ▼
-Customer Lookup                 Menu Service              Order Creation
-(restaurant_id, phone)     getRestaurantMenu(restId)   (restaurant_id, items)
+Customer WhatsApp
+       │
+       ├─► Send "hi" / "menu" ─────────► Main Menu Categories
+       ├─► Search "biryani" ───────────► Product Search Results
+       ├─► Click "Add to Cart" ────────► Cart Updated (Qty = 1)
+       ├─► "note 1 extra spicy" ───────► Instruction saved to cart item
+       ├─► "cart" / "checkout" ────────► Cart Review & Price Breakdown
+       │                                     │
+       │                                     ▼
+       ├─► Enter Address & Name ───────► Address stored in `WhatsAppCart`
+       │                                     │
+       │                                     ▼
+       ├─► Confirmation Screen ────────► Final Order Summary (COD)
+       │                                     │
+       │                                     ▼
+       └─► "confirm" ──────────────────► Server-Side Price Verification
+                                             │
+                                             ▼
+                                    Prisma DB Order Created
+                                 (Source: WHATSAPP, Status: NEW)
+                                             │
+                                             ▼
+                                    WhatsApp Cart Cleared
+                                             │
+                                             ▼
+                                    "✅ Order #ORD-XXXX placed!"
 ```
-
-### Multi-Tenant Isolation Rules:
-1. **Resolution Source**: The restaurant identity is anchored ONLY to `metadata.phone_number_id` from Meta. Sender phone numbers or payload body hints are NEVER used for restaurant lookup.
-2. **Customer Boundary**: The same customer phone number messaging two different restaurants creates two isolated `Customer` database records anchored to their respective `restaurant_id`.
-3. **Data Protection**: Menu items, categories, specials, and order operations receive the resolved `restaurant_id` directly, ensuring zero cross-tenant data leaks.
 
 ---
 
 ## Verification & Test Results
 
-### Runtime Multi-Tenant Test Results (`src/lib/whatsapp/tenant-test.ts`)
+### 1. Order Creation Tests (`src/lib/whatsapp/order-flow-test.ts`)
 ```text
-TEST A: Sagar Hotel phone_number_id lookup                   -> PASS
-TEST B: Dsmaundar Hotel phone_number_id lookup               -> PASS
-TEST C & D: Menu Isolation Check (No cross-menu leaks)       -> PASS
-TEST E: Unknown phone_number_id safety rejection             -> PASS
-TEST F: Same customer phone number across separate restaurants -> PASS (2 distinct records created)
+TEST 1: Optional special instruction ("note 1 extra spicy")    -> PASS (Stored on cart item)
+TEST 2: Cart review formatting                                 -> PASS (Displayed subtotal, delivery fee & total)
+TEST 3: Unavailable item during checkout rejection            -> PASS (Rejected checkout safely)
+TEST 4: Price recalculation safety check                       -> PASS (Server-side price verification from DB)
+TEST 5: Initiate checkout & address collection                 -> PASS (Awaiting address -> Confirmation prompt)
+TEST 6: Explicit order confirmation ("confirm")                -> PASS (Order created with COD status)
+TEST 7: DB Order & OrderItem snapshot verification            -> PASS (Verified COD, WHATSAPP source, subtotal & line item snapshots)
+TEST 8: Cart cleared after successful order                    -> PASS (Cart emptied after order creation)
+TEST 9: Multi-restaurant order isolation                      -> PASS (Dsmaundar Cafe has 0 orders, 100% isolated)
+TEST 10: Failed checkout preserves cart items                  -> PASS (Cart preserved without wiping on failure)
 
-Result: 6/6 Multi-Tenant Isolation Tests Passed (100%)
+Result: 10/10 Order Creation Tests Passed (100%)
 ```
 
-### Database Synchronization
+### 2. Search & Cart Tests (`src/lib/whatsapp/cart-test.ts`)
 ```text
-Prisma Schema: Validated 🚀
-Database Sync: Applied unique constraint `whatsapp_phone_number_id` to PostgreSQL `Restaurant` table.
-Client: Regenerated @prisma/client v7.9.1.
+Result: 8/8 Search & Cart Tests Passed (100%)
 ```
 
-### Build Result
+### 3. Menu Browsing Tests (`src/lib/whatsapp/menu-browsing-test.ts`)
 ```text
-PASS (Compiled successfully in 5.6s with Next.js Turbopack)
+Result: 5/5 Menu Browsing Tests Passed (100%)
+```
+
+### 4. Multi-Tenant Isolation Tests (`src/lib/whatsapp/tenant-test.ts`)
+```text
+Result: 6/6 Tenant Isolation Tests Passed (100%)
+```
+
+### 5. Production Build Result
+```text
+PASS (Compiled successfully in 3.4s with Next.js Turbopack)
 Route: /api/webhooks/whatsapp (Dynamic)
 ```
 
@@ -99,8 +125,12 @@ Route: /api/webhooks/whatsapp (Dynamic)
 
 ## Change Log
 
-### 2026-08-26
-- Added `whatsapp_phone_number_id` to `Restaurant` schema.
-- Built multi-tenant helper functions for Meta phone number resolution and scoped customer management.
-- Connected `/api/webhooks/whatsapp` to restaurant resolution logic.
-- Executed 6 multi-tenant isolation tests with 100% pass rate.
+### 2026-08-27
+- Implemented special instructions (`special_instructions`) for cart items.
+- Implemented stateful multi-step WhatsApp checkout flow (`AWAITING_ADDRESS` -> `AWAITING_CONFIRMATION` -> Order Creation).
+- Added server-side price recalculation from PostgreSQL database before order creation.
+- Implemented transactional `Order` and `OrderItem` creation with `source: WHATSAPP` and `payment_method: COD`.
+- Added customer record reuse for `(restaurant_id, phone)`.
+- Implemented automatic cart clearing upon order success while preserving cart items on checkout failure.
+- Created and executed 10 automated tests in `src/lib/whatsapp/order-flow-test.ts` (100% pass rate).
+- Verified production build (`npm run build`).

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getRestaurantByWhatsAppPhoneNumberId } from "@/lib/whatsapp/restaurant"
+import { processIncomingWhatsAppMessage } from "@/lib/whatsapp/router"
 
 /**
  * GET /api/webhooks/whatsapp
@@ -90,6 +91,19 @@ export async function POST(request: Request) {
             textBody = message?.text?.body
           }
 
+          let interactiveId: string | undefined = undefined
+          let interactiveTitle: string | undefined = undefined
+          if (messageType === "interactive") {
+            const interactive = message?.interactive
+            if (interactive?.type === "list_reply") {
+              interactiveId = interactive.list_reply?.id
+              interactiveTitle = interactive.list_reply?.title
+            } else if (interactive?.type === "button_reply") {
+              interactiveId = interactive.button_reply?.id
+              interactiveTitle = interactive.button_reply?.title
+            }
+          }
+
           // Log resolved multi-tenant restaurant details securely
           console.log("[WhatsApp Webhook] Event Received & Resolved to Restaurant:", {
             restaurantId: restaurant.id,
@@ -100,8 +114,21 @@ export async function POST(request: Request) {
             messageId,
             type: messageType,
             textSnippet: textBody ? textBody.slice(0, 30) : undefined,
+            interactiveId,
             timestamp,
           })
+
+          // Process incoming message with restaurant menu router
+          if (from) {
+            await processIncomingWhatsAppMessage(restaurant, {
+              id: messageId,
+              from,
+              type: messageType,
+              textBody,
+              interactiveId,
+              interactiveTitle,
+            })
+          }
         }
 
         // Extract statuses array if present (delivered, read notifications)

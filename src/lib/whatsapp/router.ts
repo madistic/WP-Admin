@@ -443,10 +443,20 @@ export async function handleInitialGreeting(
 
   if (restaurant.whatsapp_phone_number_id) {
     if (catalogId) {
-      // Find a verified SYNCED item with meta_product_sku to set as thumbnail_product_retailer_id
-      const items = await getWhatsAppItems(restaurant.id)
-      const syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+      let items = await getWhatsAppItems(restaurant.id)
+      let syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+
+      // Auto-bootstrap: if no item is marked SYNCED yet, attempt catalog sync for restaurant
+      if (!syncedItem) {
+        console.log(`[WhatsApp Router] No SYNCED catalog items found for '${restaurant.name}'. Triggering catalog sync...`)
+        const { syncRestaurantCatalog } = await import("./catalog")
+        await syncRestaurantCatalog(restaurant.id)
+        items = await getWhatsAppItems(restaurant.id)
+        syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+      }
+
       const thumbnailRetailerId = syncedItem ? syncedItem.meta_product_sku : undefined
+      console.log(`[WhatsApp Router] Sending catalog message for '${restaurant.name}' (Catalog ID: ${catalogId}, Thumbnail Retailer ID: ${thumbnailRetailerId || "NONE"})`)
 
       await sendWhatsAppCatalogMessage(
         restaurant.whatsapp_phone_number_id,

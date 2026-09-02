@@ -386,7 +386,7 @@ export async function handleInitialGreeting(
   sender: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
-  const responseText = `👋 Welcome to *${restaurant.name}*! 🍽️\n\nHow can we serve you today? Please choose an option below:`
+  const responseText = `👋 Welcome to *${restaurant.name}*!\n\nWhat would you like to do?`
 
   if (restaurant.whatsapp_phone_number_id) {
     await sendWhatsAppInteractiveButtons(
@@ -394,7 +394,7 @@ export async function handleInitialGreeting(
       sender,
       responseText,
       [
-        { id: "action_view_menu", title: "🍽️ View Menu" },
+        { id: "action_view_menu", title: "🍽️ Order Food" },
         { id: "action_track_order_prompt", title: "📦 Track Order" },
       ]
     )
@@ -577,13 +577,12 @@ export async function handleCategoryProductsSelection(
         restaurant.whatsapp_phone_number_id,
         sender,
         text,
-        [{ id: "action_categories", title: "🍽️ View Menu" }]
+        [{ id: "action_categories", title: "🍽️ Order Food" }]
       )
     }
     return { handled: true, responseText: text, intent: "category_empty" }
   }
 
-  // Calculate cart counts combining committed cart items + in-flight category selections
   const cartItemCount = (cart?.item_count || 0) + selections.reduce((sum, s) => sum + s.quantity, 0)
   const totalSelectedInBatch = selections.reduce((sum, s) => sum + s.quantity, 0)
 
@@ -593,10 +592,10 @@ export async function handleCategoryProductsSelection(
     const sel = selections.find((s) => s.menu_item_id === item.id)
     const currentQty = sel ? sel.quantity : 0
     const vegBadge = item.is_veg ? "🟢 VEG" : "🔴 NON-VEG"
-    const qtyBadge = currentQty > 0 ? `  |  *[- ${currentQty} +]*` : "  |  *[+ Add]*"
+    const statusTag = currentQty > 0 ? "  |  *[ ✓ Added ]*" : "  |  *[ + Add ]*"
 
     lines.push(`${idx + 1}. *${item.name.replace(/^[🟢🔴]\s*/, "")}*`)
-    lines.push(`   ${vegBadge}  •  *${item.price_display}*${qtyBadge}`)
+    lines.push(`   ${vegBadge}  •  *${item.price_display}*${statusTag}`)
     if (item.description) {
       lines.push(`   _${item.description.slice(0, 80)}${item.description.length > 80 ? "..." : ""}_`)
     }
@@ -604,10 +603,7 @@ export async function handleCategoryProductsSelection(
   })
 
   if (cart && cart.item_count > 0) {
-    lines.push(`🛒 *Current Cart:* ${cart.item_count} items • ₹${cart.total.toFixed(2)}`)
-  }
-  if (totalSelectedInBatch > 0) {
-    lines.push(`➕ *Selected in this batch:* ${totalSelectedInBatch} items`)
+    lines.push(`🛒 *Cart:* ${cart.item_count} items • ₹${cart.total.toFixed(2)}`)
   }
 
   const responseText = lines.join("\n")
@@ -619,25 +615,19 @@ export async function handleCategoryProductsSelection(
         const sel = selections.find((s) => s.menu_item_id === item.id)
         const currentQty = sel ? sel.quantity : 0
         const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
+        const btnLabel = currentQty > 0 ? `[✓ Added] ${cleanName}` : `[+ Add] ${cleanName}`
 
         rows.push({
           id: `sel_inc_${categoryId}_${item.id}`,
-          title: `[+] Add ${cleanName}`.slice(0, 24),
-          description: `${item.price_display} • Currently: ${currentQty}`.slice(0, 72),
+          title: btnLabel.slice(0, 24),
+          description: `${item.price_display}${currentQty > 0 ? ` • Added x${currentQty}` : ""}`.slice(0, 72),
         })
-        if (currentQty > 0) {
-          rows.push({
-            id: `sel_dec_${categoryId}_${item.id}`,
-            title: `[-] Sub ${cleanName}`.slice(0, 24),
-            description: `Reduce quantity (Currently: ${currentQty})`.slice(0, 72),
-          })
-        }
       })
 
       rows.push({
         id: `commit_cat_${categoryId}`,
-        title: "🛒 View Cart / Add Items",
-        description: cartItemCount > 0 ? `Cart: ${cartItemCount} items` : "Commit selection to cart",
+        title: "🛒 View Cart",
+        description: cartItemCount > 0 ? `Open Cart (${cartItemCount} items)` : "View cart items",
       })
 
       rows.push({
@@ -650,7 +640,7 @@ export async function handleCategoryProductsSelection(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        "Order Items",
+        "Select Items",
         [{ title: catName.slice(0, 24), rows }]
       )
     } else {
@@ -712,7 +702,7 @@ export async function handleViewCart(
         sender,
         text,
         [
-          { id: "action_categories", title: "🍽️ View Menu" },
+          { id: "action_categories", title: "🍽️ Order Food" },
           { id: "action_initial_greeting", title: "🔙 Main Menu" },
         ]
       )
@@ -721,24 +711,21 @@ export async function handleViewCart(
   }
 
   const lines: string[] = []
-  lines.push(`🛒 *YOUR ORDER SUMMARY* (${cart.restaurant_name})\n`)
+  lines.push(`🛒 *YOUR CART* (${cart.restaurant_name})\n`)
 
-  cart.items.forEach((item, idx) => {
-    const vegBadge = item.is_veg ? "🟢" : "🔴"
-    lines.push(`${idx + 1}. ${vegBadge} *${item.name}* [- ${item.quantity} +]`)
-    lines.push(`   Price: ₹${item.unit_price.toFixed(2)}  •  Subtotal: *₹${item.line_total.toFixed(2)}*`)
-    if (item.variant_name) lines.push(`   Size: ${item.variant_name}`)
-    if (item.addons_detail) lines.push(`   Add-ons: ${item.addons_detail}`)
-    if (item.special_instructions) lines.push(`   Instruction: _"${item.special_instructions}"_`)
-    if (!item.is_available) lines.push(`   ⚠️ _Item currently unavailable_`)
+  cart.items.forEach((item) => {
+    lines.push(`*${item.name}*`)
+    lines.push(`₹${item.unit_price.toFixed(2)} × ${item.quantity}        ₹${item.line_total.toFixed(2)}`)
+    if (item.variant_name) lines.push(`Size: ${item.variant_name}`)
+    if (item.addons_detail) lines.push(`Add-ons: ${item.addons_detail}`)
+    if (item.special_instructions) lines.push(`Instruction: _"${item.special_instructions}"_`)
     lines.push("")
   })
 
-  lines.push(`💵 *Subtotal:* ₹${cart.subtotal.toFixed(2)}`)
-  if (cart.delivery_fee > 0) {
-    lines.push(`🛵 *Delivery Fee:* ₹${cart.delivery_fee.toFixed(2)}`)
-  }
-  lines.push(`💰 *Total Amount:* *₹${cart.total.toFixed(2)}*`)
+  lines.push(`Subtotal         ₹${cart.subtotal.toFixed(2)}`)
+  lines.push(`Delivery         ${cart.delivery_fee === 0 ? "FREE" : `₹${cart.delivery_fee.toFixed(2)}`}`)
+  lines.push(`---------------------`)
+  lines.push(`Total            *₹${cart.total.toFixed(2)}*`)
 
   const responseText = lines.join("\n")
 
@@ -748,9 +735,9 @@ export async function handleViewCart(
       sender,
       responseText,
       [
-        { id: "cart_checkout", title: "➡️ Proceed Checkout" },
         { id: "action_categories", title: "🍽️ Add More" },
-        { id: "action_edit_cart", title: "✏️ Edit Cart" },
+        { id: "cart_checkout", title: "➡️ Checkout" },
+        { id: "action_edit_cart", title: "✏️ Edit Quantities" },
       ]
     )
   }
@@ -771,7 +758,7 @@ export async function handleEditCart(
     return await handleViewCart(restaurant, sender)
   }
 
-  const bodyText = "✏️ *EDIT CART ITEMS*\nSelect an action below to update quantities, remove items, or add notes:"
+  const bodyText = "✏️ *EDIT QUANTITIES*\nIncrease, decrease, or remove items below:"
 
   if (restaurant.whatsapp_phone_number_id) {
     const rows: Array<{ id: string; title: string; description?: string }> = []
@@ -779,24 +766,20 @@ export async function handleEditCart(
       const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
       rows.push({
         id: `cart_inc_${item.id}`,
-        title: `[+] Add 1: ${cleanName}`.slice(0, 24),
-        description: `Current Qty: ${item.quantity} • Subtotal: ₹${item.line_total.toFixed(2)}`.slice(0, 72),
+        title: `[ + ] ${cleanName}`.slice(0, 24),
+        description: `Current: ${item.quantity} (₹${item.unit_price.toFixed(2)} each)`.slice(0, 72),
       })
       rows.push({
         id: `cart_dec_${item.id}`,
-        title: `[-] Sub 1: ${cleanName}`.slice(0, 24),
-        description: `Current Qty: ${item.quantity}`.slice(0, 72),
+        title: `[ − ] ${cleanName}`.slice(0, 24),
+        description: `Current: ${item.quantity} (Reduce / Remove)`.slice(0, 72),
       })
-      rows.push({
-        id: `cart_rem_${item.id}`,
-        title: `❌ Remove ${cleanName}`.slice(0, 24),
-        description: `Remove item from cart`.slice(0, 72),
-      })
-      rows.push({
-        id: `add_note_prompt_${item.id}`,
-        title: `📝 Note: ${cleanName}`.slice(0, 24),
-        description: item.special_instructions ? `Note: ${item.special_instructions}` : "Add special instruction",
-      })
+    })
+
+    rows.push({
+      id: "action_view_cart",
+      title: "🛒 View Cart",
+      description: `Return to cart summary`,
     })
 
     if (rows.length <= 10) {
@@ -805,7 +788,7 @@ export async function handleEditCart(
         sender,
         bodyText,
         "Modify Cart",
-        [{ title: "Cart Actions", rows }]
+        [{ title: "Cart Quantities", rows }]
       )
     } else {
       await sendWhatsAppInteractiveButtons(
@@ -813,7 +796,7 @@ export async function handleEditCart(
         sender,
         bodyText,
         [
-          { id: "action_view_cart", title: "💾 Update / View Cart" },
+          { id: "action_view_cart", title: "🛒 View Cart" },
           { id: "action_categories", title: "🍽️ Add More" },
           { id: "cart_checkout", title: "➡️ Checkout" },
         ]
@@ -1053,12 +1036,10 @@ export async function handleFinalOrderCreation(
     }
   } else {
     const lines: string[] = []
-    lines.push(`✅ *Order placed successfully!*\n`)
-    lines.push(`Order *#${result.orderNumber}*`)
+    lines.push(`🎉 *Order Confirmed!*\n`)
+    lines.push(`Order ID: *#${result.orderNumber}*`)
     lines.push(`Total: *₹${result.total?.toFixed(2)}*`)
-    lines.push(`Payment: *Cash on Delivery*`)
-    lines.push(`Status: *New*`)
-    lines.push(`\nThank you for ordering with *${restaurant.name}*! 🍽️`)
+    lines.push(`\nWe'll prepare your order shortly.`)
     responseText = lines.join("\n")
 
     if (restaurant.whatsapp_phone_number_id) {
@@ -1066,7 +1047,7 @@ export async function handleFinalOrderCreation(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        [{ id: "action_initial_greeting", title: "🔙 Main Menu" }]
+        [{ id: "action_track_order_prompt", title: "📦 Track Order" }]
       )
     }
   }

@@ -366,6 +366,10 @@ export async function clearCart(restaurantId: string, customerWhatsappNumber: st
     where: { cart_id: cart.id },
   })
 
+  await prisma.categoryItemSelection.deleteMany({
+    where: { cart_id: cart.id },
+  })
+
   await prisma.whatsAppCart.update({
     where: { id: cart.id },
     data: {
@@ -376,6 +380,108 @@ export async function clearCart(restaurantId: string, customerWhatsappNumber: st
   })
 
   return true
+}
+
+/**
+ * Category Item Selection helpers (for stage 3 multi-item selection before adding to cart)
+ */
+export async function getCategorySelections(restaurantId: string, customerWhatsappNumber: string) {
+  const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
+  const selections = await prisma.categoryItemSelection.findMany({
+    where: { cart_id: cart.id },
+  })
+  return { cartId: cart.id, selections }
+}
+
+export async function updateCategorySelectionQuantity(
+  restaurantId: string,
+  customerWhatsappNumber: string,
+  menuItemId: string,
+  delta: number,
+  options?: { variantId?: string; addons?: string[] }
+) {
+  const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
+  const existing = await prisma.categoryItemSelection.findUnique({
+    where: {
+      cart_id_menu_item_id: {
+        cart_id: cart.id,
+        menu_item_id: menuItemId,
+      },
+    },
+  })
+
+  const newQty = (existing?.quantity || 0) + delta
+
+  if (newQty <= 0) {
+    if (existing) {
+      await prisma.categoryItemSelection.delete({
+        where: { id: existing.id },
+      })
+    }
+  } else {
+    const addonsJson = options?.addons ? JSON.stringify(options.addons) : existing?.addons || null
+    const variantId = options?.variantId !== undefined ? options.variantId : existing?.variant_id || null
+
+    if (existing) {
+      await prisma.categoryItemSelection.update({
+        where: { id: existing.id },
+        data: {
+          quantity: newQty,
+          variant_id: variantId,
+          addons: addonsJson,
+        },
+      })
+    } else {
+      await prisma.categoryItemSelection.create({
+        data: {
+          cart_id: cart.id,
+          menu_item_id: menuItemId,
+          quantity: newQty,
+          variant_id: variantId,
+          addons: addonsJson,
+        },
+      })
+    }
+  }
+
+  return await getCategorySelections(restaurantId, customerWhatsappNumber)
+}
+
+export async function clearCategorySelections(restaurantId: string, customerWhatsappNumber: string) {
+  const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
+  await prisma.categoryItemSelection.deleteMany({
+    where: { cart_id: cart.id },
+  })
+}
+
+export async function commitSelectionsToCart(restaurantId: string, customerWhatsappNumber: string) {
+  const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
+  const selections = await prisma.categoryItemSelection.findMany({
+    where: { cart_id: cart.id },
+  })
+
+  for (const sel of selections) {
+    let parsedAddons: string[] | undefined = undefined
+    if (sel.addons) {
+      try {
+        const arr = JSON.parse(sel.addons)
+        if (Array.isArray(arr)) parsedAddons = arr.map((a: any) => typeof a === "string" ? a : a.id || a.name)
+      } catch (e) {}
+    }
+
+    await addToCart(restaurantId, customerWhatsappNumber, sel.menu_item_id, {
+      quantity: sel.quantity,
+      variantId: sel.variant_id || undefined,
+      addonIds: parsedAddons,
+    })
+  }
+
+  // Clear selections after commit
+  await prisma.categoryItemSelection.deleteMany({
+    where: { cart_id: cart.id },
+  })
+
+  return await getCartDetails(restaurantId, customerWhatsappNumber)
 }
 
 /**

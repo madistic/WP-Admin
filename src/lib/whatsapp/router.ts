@@ -20,7 +20,12 @@ import {
   updateCartCheckoutStep,
   validateCartForCheckout,
   createOrderFromCart,
+  getCategorySelections,
+  updateCategorySelectionQuantity,
+  commitSelectionsToCart,
+  clearCategorySelections,
 } from "./cart"
+import prisma from "@/lib/prisma"
 
 export interface IncomingWhatsAppMessageData {
   id: string
@@ -55,11 +60,31 @@ export async function processIncomingWhatsAppMessage(
   const interactiveId = message.interactiveId || ""
   const cleanText = rawText.toLowerCase()
 
-  // Fetch current cart state to check active checkout steps
+  // Fetch current cart state to check active steps
   const cart = await getCartDetails(restaurant.id, sender)
 
-  // 1. Checkout State Machine Handling
-  if (cart && (cart.checkout_step === "AWAITING_NAME" || cart.checkout_step === "AWAITING_ADDRESS" || cart.checkout_step === "AWAITING_LOCATION_CHOICE" || cart.checkout_step === "AWAITING_MANUAL_ADDRESS" || cart.checkout_step === "AWAITING_BUILDING_NO" || cart.checkout_step === "AWAITING_CONFIRMATION")) {
+  // 1. TRACK ORDER STATE HANDLING
+  if (cart && cart.checkout_step === "AWAITING_TRACKING_ORDER_ID") {
+    if (interactiveId === "action_main_menu" || cleanText === "menu" || cleanText === "hi" || cleanText === "cancel") {
+      await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+      return await handleInitialGreeting(restaurant, sender)
+    }
+
+    if (rawText.length > 0) {
+      return await handleOrderTrackingQuery(restaurant, sender, rawText)
+    }
+  }
+
+  // 2. CHECKOUT STATE MACHINE HANDLING
+  if (
+    cart &&
+    (cart.checkout_step === "AWAITING_NAME" ||
+      cart.checkout_step === "AWAITING_ADDRESS" ||
+      cart.checkout_step === "AWAITING_LOCATION_CHOICE" ||
+      cart.checkout_step === "AWAITING_MANUAL_ADDRESS" ||
+      cart.checkout_step === "AWAITING_BUILDING_NO" ||
+      cart.checkout_step === "AWAITING_CONFIRMATION")
+  ) {
     if (interactiveId === "co_cancel" || cleanText === "cancel") {
       await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
       const responseText = "❌ Checkout cancelled. Your cart items are preserved."
@@ -70,11 +95,16 @@ export async function processIncomingWhatsAppMessage(
           responseText,
           [
             { id: "action_view_cart", title: "🛒 View Cart" },
-            { id: "action_main_menu", title: "📋 Main Menu" },
+            { id: "action_categories", title: "🍽️ View Menu" },
           ]
         )
       }
       return { handled: true, responseText, intent: "checkout_cancelled" }
+    }
+
+    if (interactiveId === "co_edit_cart" || cleanText === "edit cart") {
+      await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+      return await handleEditCart(restaurant, sender)
     }
 
     if (cart.checkout_step === "AWAITING_NAME") {
@@ -102,7 +132,7 @@ export async function processIncomingWhatsAppMessage(
     if (cart.checkout_step === "AWAITING_LOCATION_CHOICE") {
       if (interactiveId === "loc_share_current" || cleanText.includes("share") || cleanText.includes("location")) {
         await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_BUILDING_NO")
-        const responseText = "📍 Please send your WhatsApp Location now!"
+        const responseText = "📍 Please share your current location attachment via WhatsApp."
         if (restaurant.whatsapp_phone_number_id) {
           await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
         }
@@ -111,7 +141,7 @@ export async function processIncomingWhatsAppMessage(
 
       if (interactiveId === "loc_enter_manual" || cleanText.includes("manual") || cleanText.includes("enter")) {
         await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_MANUAL_ADDRESS")
-        const responseText = "✍️ Please type your complete delivery address in ONE message:\n_(e.g., Flat 402, Sunshine Apartments, Bandra East, Mumbai)_"
+        const responseText = "✍️ Please type your complete delivery address in ONE message:\n_(e.g. Flat 402, Sunshine Apartments, Bandra East, Mumbai)_"
         if (restaurant.whatsapp_phone_number_id) {
           await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
         }
@@ -120,15 +150,13 @@ export async function processIncomingWhatsAppMessage(
     }
 
     if (cart.checkout_step === "AWAITING_BUILDING_NO") {
-      let locAddress = cart.delivery_address || ""
-
       if (message.type === "location" && message.location) {
         const loc = message.location
-        locAddress = loc.address || loc.name || `Lat: ${loc.latitude.toFixed(4)}, Long: ${loc.longitude.toFixed(4)}`
+        const locAddress = loc.address || loc.name || `Lat: ${loc.latitude.toFixed(4)}, Long: ${loc.longitude.toFixed(4)}`
         await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_BUILDING_NO", {
           deliveryAddress: locAddress,
         })
-        const responseText = `📍 Received location!\nNow, please enter your *Building / Room / Flat number*:`
+        const responseText = `📍 Received location!\nNow, please reply with your *Building / Room / Flat number*:`
         if (restaurant.whatsapp_phone_number_id) {
           await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
         }
@@ -158,11 +186,6 @@ export async function processIncomingWhatsAppMessage(
         return await handleFinalOrderCreation(restaurant, sender)
       }
 
-      if (interactiveId === "co_edit_cart" || cleanText === "edit cart") {
-        await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
-        return await handleViewCart(restaurant, sender)
-      }
-
       if (interactiveId === "co_change_address" || cleanText === "change address") {
         await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_LOCATION_CHOICE")
         const responseText = "📍 How would you like to update your delivery address?"
@@ -183,22 +206,51 @@ export async function processIncomingWhatsAppMessage(
     }
   }
 
-  // 2. Interactive Button / List Reply Handlers
-  if (interactiveId === "action_main_menu" || interactiveId === "action_categories") {
-    return await handleMainMenu(restaurant, sender)
+  // 3. INTERACTIVE BUTTON / LIST REPLY HANDLERS
+  if (interactiveId === "action_initial_greeting" || cleanText === "hi" || cleanText === "hello" || cleanText === "start" || cleanText === "hey") {
+    return await handleInitialGreeting(restaurant, sender)
   }
 
-  if (interactiveId === "action_search_prompt") {
-    return await handleSearchPrompt(restaurant, sender)
+  if (interactiveId === "action_track_order_prompt" || cleanText === "track order" || cleanText === "track") {
+    return await handleTrackOrderPrompt(restaurant, sender)
   }
 
-  if (interactiveId === "action_view_cart") {
+  if (interactiveId === "action_view_menu" || interactiveId === "action_categories" || cleanText === "view menu" || cleanText === "menu") {
+    return await handleCategoriesList(restaurant, sender)
+  }
+
+  if (interactiveId === "action_view_cart" || cleanText === "view cart" || cleanText === "cart") {
     return await handleViewCart(restaurant, sender)
+  }
+
+  if (interactiveId === "action_edit_cart" || cleanText === "edit cart") {
+    return await handleEditCart(restaurant, sender)
   }
 
   if (interactiveId.startsWith("cat_")) {
     const categoryId = interactiveId.replace("cat_", "")
-    return await handleCategorySelection(restaurant, sender, categoryId)
+    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
+  }
+
+  // Category Multi-Selection quantity adjustments (+ / -)
+  if (interactiveId.startsWith("sel_inc_")) {
+    const parts = interactiveId.replace("sel_inc_", "").split("_")
+    const categoryId = parts[0]
+    const itemId = parts[1]
+    await updateCategorySelectionQuantity(restaurant.id, sender, itemId, 1)
+    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
+  }
+
+  if (interactiveId.startsWith("sel_dec_")) {
+    const parts = interactiveId.replace("sel_dec_", "").split("_")
+    const categoryId = parts[0]
+    const itemId = parts[1]
+    await updateCategorySelectionQuantity(restaurant.id, sender, itemId, -1)
+    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
+  }
+
+  if (interactiveId.startsWith("commit_cat_")) {
+    return await handleCommitCategorySelections(restaurant, sender)
   }
 
   if (interactiveId.startsWith("item_")) {
@@ -225,10 +277,6 @@ export async function processIncomingWhatsAppMessage(
     return await handleViewCart(restaurant, sender)
   }
 
-  if (interactiveId === "cart_manage") {
-    return await handleCartManageOptions(restaurant, sender)
-  }
-
   if (interactiveId.startsWith("cart_inc_")) {
     const cartItemId = interactiveId.replace("cart_inc_", "")
     return await handleCartQuantityChange(restaurant, sender, cartItemId, 1)
@@ -244,11 +292,11 @@ export async function processIncomingWhatsAppMessage(
     return await handleCartItemRemoval(restaurant, sender, cartItemId)
   }
 
-  if (interactiveId === "cart_checkout" || interactiveId === "action_checkout") {
+  if (interactiveId === "cart_checkout" || interactiveId === "action_checkout" || cleanText === "checkout") {
     return await handleInitiateCheckout(restaurant, sender)
   }
 
-  if (interactiveId === "cart_clear") {
+  if (interactiveId === "cart_clear" || cleanText === "clear" || cleanText === "clear cart") {
     await clearCart(restaurant.id, sender)
     const responseText = "🧹 Your cart has been cleared!"
     if (restaurant.whatsapp_phone_number_id) {
@@ -256,7 +304,7 @@ export async function processIncomingWhatsAppMessage(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        [{ id: "action_main_menu", title: "📋 Browse Menu" }]
+        [{ id: "action_categories", title: "🍽️ View Menu" }]
       )
     }
     return { handled: true, responseText, intent: "clear_cart" }
@@ -275,7 +323,7 @@ export async function processIncomingWhatsAppMessage(
         responseText,
         [
           { id: "action_view_cart", title: "🛒 View Cart" },
-          { id: "action_checkout", title: "💳 Checkout" },
+          { id: "action_checkout", title: "✅ Checkout" },
         ]
       )
     }
@@ -288,58 +336,27 @@ export async function processIncomingWhatsAppMessage(
     return await handleSearchResults(restaurant, sender, rawText)
   }
 
-  // 3. Checkout Intent ("checkout", "place order", "buy")
-  const checkoutKeywords = ["checkout", "place order", "buy", "pay"]
-  if (checkoutKeywords.includes(cleanText)) {
-    return await handleInitiateCheckout(restaurant, sender)
-  }
-
-  // 4. View Cart Intent ("cart", "view cart", "my cart", "basket")
-  const cartKeywords = ["cart", "view cart", "my cart", "basket"]
-  if (cartKeywords.includes(cleanText)) {
-    return await handleViewCart(restaurant, sender)
-  }
-
-  // 5. Special Instruction Command ("note 1 extra spicy", "note 1 no onion")
+  // Text commands fallback (+1 1, -1 1, remove 1, note 1 xxx, add xxx)
   if (cleanText.startsWith("note ")) {
     return await handleItemNoteCommand(restaurant, sender, rawText)
   }
 
-  // 6. Clear Cart Intent ("clear", "clear cart", "empty cart")
-  const clearKeywords = ["clear", "clear cart", "empty cart"]
-  if (clearKeywords.includes(cleanText)) {
-    await clearCart(restaurant.id, sender)
-    const responseText = "🧹 Your cart has been cleared!\n\nReply 'menu' to view available items."
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
-    }
-    return { handled: true, responseText, intent: "clear_cart" }
-  }
-
-  // 7. Quantity modification via text ("+1 1", "-1 1", "remove 1")
   if (cleanText.startsWith("+1 ") || cleanText.startsWith("-1 ") || cleanText.startsWith("remove ")) {
     return await handleTextQuantityCommand(restaurant, sender, cleanText)
   }
 
-  // 8. Add to Cart via text ("add 1", "add biryani")
   if (cleanText.startsWith("add ")) {
     const target = cleanText.replace("add ", "").trim()
     return await handleAddToCartTextCommand(restaurant, sender, target)
   }
 
-  // 9. Greeting / Main Menu Intent ("hi", "hello", "menu", "start", "hey")
-  const greetingKeywords = ["hi", "hello", "menu", "start", "hey", "categories", "home", "main"]
-  if (greetingKeywords.includes(cleanText) || cleanText === "") {
-    return await handleMainMenu(restaurant, sender)
-  }
-
-  // 10. Match Category by Number or Name
+  // Match category by number or name fallback
   const categories = await getWhatsAppCategories(restaurant.id)
   if (/^\d+$/.test(cleanText)) {
     const numIndex = parseInt(cleanText, 10)
     if (numIndex >= 1 && numIndex <= categories.length) {
       const selectedCat = categories[numIndex - 1]
-      return await handleCategorySelection(restaurant, sender, selectedCat.id)
+      return await handleCategoryProductsSelection(restaurant, sender, selectedCat.id)
     }
   }
 
@@ -347,98 +364,148 @@ export async function processIncomingWhatsAppMessage(
     (c) => c.title.toLowerCase() === cleanText || cleanText.includes(c.title.toLowerCase())
   )
   if (matchedCategory) {
-    return await handleCategorySelection(restaurant, sender, matchedCategory.id)
+    return await handleCategoryProductsSelection(restaurant, sender, matchedCategory.id)
   }
 
-  // 11. Search Products by Name / Keyword
-  return await handleSearchResults(restaurant, sender, rawText)
+  // Search Products by Name / Keyword
+  const searchResults = await getWhatsAppItems(restaurant.id, { searchQuery: rawText })
+  if (searchResults.length > 0) {
+    return await handleSearchResults(restaurant, sender, rawText)
+  }
+
+  // Default to Initial Greeting
+  return await handleInitialGreeting(restaurant, sender)
 }
 
 /**
- * Prompt for Search keyword.
+ * STEP 1: INITIAL GREETING ("Hi")
+ * Shows exactly: 🍽️ View Menu & 📦 Track Order
  */
-export async function handleSearchPrompt(
+export async function handleInitialGreeting(
   restaurant: ResolvedRestaurantInfo,
   sender: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_SEARCH_QUERY")
-  const responseText = "🔍 What are you looking for?\n\nType the product name or keyword (e.g. *\"biryani\"*):"
+  await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+  const responseText = `👋 Welcome to *${restaurant.name}*! 🍽️\n\nHow can we serve you today? Please choose an option below:`
+
   if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [
+        { id: "action_view_menu", title: "🍽️ View Menu" },
+        { id: "action_track_order_prompt", title: "📦 Track Order" },
+      ]
+    )
   }
-  return { handled: true, responseText, intent: "search_prompt" }
+
+  return { handled: true, responseText, intent: "initial_greeting" }
 }
 
 /**
- * Renders Search Results as interactive list items.
+ * STEP 9: TRACK ORDER PROMPT & QUERY
  */
-export async function handleSearchResults(
+export async function handleTrackOrderPrompt(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_TRACKING_ORDER_ID")
+  const responseText = "📦 *Order Tracking*\n\nPlease enter your *Order ID* (e.g. *ORD-123456*):"
+
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [{ id: "action_initial_greeting", title: "🔙 Back to Main Menu" }]
+    )
+  }
+
+  return { handled: true, responseText, intent: "track_order_prompt" }
+}
+
+export async function handleOrderTrackingQuery(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
-  query: string
+  orderIdInput: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const searchResults = await getWhatsAppItems(restaurant.id, { searchQuery: query })
+  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+  const cleanOrderId = orderIdInput.trim().toUpperCase()
 
-  if (searchResults.length === 0) {
-    const responseText = `🔍 No items found matching "${query}".`
+  const order = await prisma.order.findFirst({
+    where: {
+      order_number: cleanOrderId,
+      restaurant_id: restaurant.id,
+      customer_phone_snapshot: cleanPhone,
+    },
+    include: { items: true },
+  })
+
+  if (!order) {
+    const responseText = `❌ *Order Not Found*\n\nCould not find Order ID *"${orderIdInput}"* for your phone number at ${restaurant.name}.\n\nPlease check the ID and try again, or return to main menu.`
     if (restaurant.whatsapp_phone_number_id) {
       await sendWhatsAppInteractiveButtons(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
         [
-          { id: "action_search_prompt", title: "🔍 Search Again" },
-          { id: "action_main_menu", title: "📋 Main Menu" },
+          { id: "action_track_order_prompt", title: "📦 Retry Order ID" },
+          { id: "action_initial_greeting", title: "🔙 Back to Main Menu" },
         ]
       )
     }
-    return { handled: true, responseText, intent: "search_no_results" }
+    return { handled: true, responseText, intent: "track_order_not_found" }
   }
 
-  if (searchResults.length === 1) {
-    return await handleItemSelection(restaurant, sender, searchResults[0].id)
+  await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+
+  const statusLabels: Record<string, string> = {
+    NEW: "🟡 Received (New)",
+    IN_PROCESS: "👨‍🍳 Preparing in Kitchen",
+    OUT_FOR_DELIVERY: "🛵 Out for Delivery",
+    DELIVERED: "✅ Delivered",
+    REJECTED: "❌ Rejected",
+    CANCELLED: "❌ Cancelled",
   }
 
-  const responseText = `🔍 Search results for *"${query}"*:`
+  const statusDisplay = statusLabels[order.status] || order.status
+
+  const lines: string[] = []
+  lines.push(`📦 *Order Status for #${order.order_number}*\n`)
+  lines.push(`Status: *${statusDisplay}*`)
+  lines.push(`Total Amount: *₹${order.total.toFixed(2)}* (${order.items.length} items)`)
+  lines.push(`Payment: *${order.payment_method} (${order.payment_status})*`)
+  lines.push(`Placed On: ${order.created_at.toLocaleString("en-IN")}`)
+
+  const responseText = lines.join("\n")
 
   if (restaurant.whatsapp_phone_number_id) {
-    if (searchResults.length <= 10) {
-      const rows = searchResults.map((item) => ({
-        id: `item_${item.id}`,
-        title: item.name.slice(0, 24),
-        description: `${item.price_display}${item.description ? " - " + item.description : ""}`.slice(0, 72),
-      }))
-
-      await sendWhatsAppInteractiveList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        "Select Item",
-        [{ title: "Matching Products", rows }]
-      )
-    } else {
-      const lines: string[] = [responseText + "\n"]
-      searchResults.forEach((item, idx) => {
-        lines.push(`${idx + 1}. ${item.name} - ${item.price_display}`)
-      })
-      lines.push(`\nReply item number to view details!`)
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, lines.join("\n"))
-    }
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [
+        { id: "action_initial_greeting", title: "🔙 Main Menu" },
+        { id: "action_view_cart", title: "🛒 View Cart" },
+      ]
+    )
   }
 
-  return { handled: true, responseText, intent: "search_results" }
+  return { handled: true, responseText, intent: "track_order_success" }
 }
 
 /**
- * Renders and sends Main Category Menu for a restaurant using WhatsApp Interactive List/Buttons.
+ * STEP 2 & 5: CATEGORIES LIST
  */
-export async function handleMainMenu(
+export async function handleCategoriesList(
   restaurant: ResolvedRestaurantInfo,
   sender: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   const categories = await getWhatsAppCategories(restaurant.id)
+  const cart = await getCartDetails(restaurant.id, sender)
 
-  const bodyText = `👋 Welcome to *${restaurant.name}*! 🍽️\nSelect a category below or search for items:`
+  const bodyText = `📂 *Menu Categories*\nSelect a category below to view items:`
 
   if (categories.length === 0) {
     const fallbackText = `👋 Welcome to *${restaurant.name}*!\n\nOur menu is currently being updated. Please check back soon!`
@@ -453,18 +520,27 @@ export async function handleMainMenu(
       const rows = categories.map((cat) => ({
         id: `cat_${cat.id}`,
         title: cat.title.slice(0, 24),
-        description: `${cat.item_count} items${cat.description ? " • " + cat.description : ""}`.slice(0, 72),
+        description: `${cat.item_count} items`.slice(0, 72),
       }))
+
+      // Always include View Cart row if cart has items
+      if (cart && cart.item_count > 0 && rows.length < 10) {
+        rows.push({
+          id: "action_view_cart",
+          title: "🛒 View Cart",
+          description: `${cart.item_count} items • Total: ₹${cart.total.toFixed(2)}`,
+        })
+      }
 
       await sendWhatsAppInteractiveList(
         restaurant.whatsapp_phone_number_id,
         sender,
         bodyText,
-        "Browse Menu",
+        "Select Category",
         [{ title: "Categories", rows }]
       )
     } else {
-      const lines: string[] = [`👋 Welcome to *${restaurant.name}*! 🍽️\n\nExplore our categories:\n`]
+      const lines: string[] = [`📂 *Menu Categories* (${restaurant.name}):\n`]
       categories.forEach((cat, idx) => {
         lines.push(`${idx + 1}. *${cat.title}* (${cat.item_count} items)`)
       })
@@ -473,25 +549,25 @@ export async function handleMainMenu(
     }
   }
 
-  return { handled: true, responseText: bodyText, intent: "main_menu" }
+  return { handled: true, responseText: bodyText, intent: "categories_list" }
 }
 
 /**
- * Renders and sends Category Items view for a restaurant.
+ * STEP 3: CATEGORY PRODUCT MULTI-SELECTION (+ / - controls)
  */
-export async function handleCategorySelection(
+export async function handleCategoryProductsSelection(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
   categoryId: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const [categories, items] = await Promise.all([
+  const [categories, items, { selections }] = await Promise.all([
     getWhatsAppCategories(restaurant.id),
     getWhatsAppItems(restaurant.id, { categoryId }),
+    getCategorySelections(restaurant.id, sender),
   ])
 
   const category = categories.find((c) => c.id === categoryId)
   const catName = category ? category.title : "Category"
-  const bodyText = `📂 *${catName}* (${items.length} items):`
 
   if (items.length === 0) {
     const text = `No items currently available in *${catName}*.`
@@ -500,42 +576,226 @@ export async function handleCategorySelection(
         restaurant.whatsapp_phone_number_id,
         sender,
         text,
-        [{ id: "action_main_menu", title: "📋 Main Menu" }]
+        [{ id: "action_categories", title: "📂 View Menu" }]
       )
     }
     return { handled: true, responseText: text, intent: "category_empty" }
   }
 
+  const lines: string[] = [`📂 *${catName}* (Select items & quantities below):\n`]
+  items.forEach((item, idx) => {
+    const sel = selections.find((s) => s.menu_item_id === item.id)
+    const qtyStr = sel ? ` *(x${sel.quantity})*` : ""
+    lines.push(`${idx + 1}. ${item.name} - ${item.price_display}${qtyStr}`)
+  })
+
+  const totalSelectedCount = selections.reduce((sum, s) => sum + s.quantity, 0)
+  lines.push(`\nSelected items in batch: *${totalSelectedCount}*`)
+
+  const responseText = lines.join("\n")
+
   if (restaurant.whatsapp_phone_number_id) {
-    if (items.length <= 10) {
-      const rows = items.map((item) => ({
-        id: `item_${item.id}`,
-        title: item.name.slice(0, 24),
-        description: `${item.price_display}${item.description ? " - " + item.description : ""}`.slice(0, 72),
-      }))
+    if (items.length <= 8) {
+      const rows: Array<{ id: string; title: string; description?: string }> = []
+      items.forEach((item) => {
+        const sel = selections.find((s) => s.menu_item_id === item.id)
+        const currentQty = sel ? sel.quantity : 0
+        rows.push({
+          id: `sel_inc_${categoryId}_${item.id}`,
+          title: `➕ Add ${item.name.replace(/^[🟢🔴]\s*/, "")}`.slice(0, 24),
+          description: `${item.price_display} • Selected: ${currentQty}`.slice(0, 72),
+        })
+        if (currentQty > 0) {
+          rows.push({
+            id: `sel_dec_${categoryId}_${item.id}`,
+            title: `➖ Sub ${item.name.replace(/^[🟢🔴]\s*/, "")}`.slice(0, 24),
+            description: `Reduce selected quantity (${currentQty})`.slice(0, 72),
+          })
+        }
+      })
+
+      rows.push({
+        id: `commit_cat_${categoryId}`,
+        title: "🛒 Add to Cart",
+        description: `Add ${totalSelectedCount} items to your cart`.slice(0, 72),
+      })
 
       await sendWhatsAppInteractiveList(
         restaurant.whatsapp_phone_number_id,
         sender,
-        bodyText,
-        "View Products",
+        responseText,
+        "Select Items",
         [{ title: catName.slice(0, 24), rows }]
       )
     } else {
-      const lines: string[] = [bodyText + "\n"]
-      items.forEach((item, idx) => {
-        lines.push(`${idx + 1}. ${item.name} - ${item.price_display}`)
-      })
-      lines.push(`\nReply item number to view details!`)
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, lines.join("\n"))
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        [
+          { id: `commit_cat_${categoryId}`, title: "🛒 Add to Cart" },
+          { id: "action_categories", title: "📂 Menu" },
+          { id: "action_view_cart", title: "🛍️ View Cart" },
+        ]
+      )
     }
   }
 
-  return { handled: true, responseText: bodyText, intent: "category_items" }
+  return { handled: true, responseText, intent: "category_items_selection" }
 }
 
 /**
- * Renders and sends Item Details view with tap-first variant/addon buttons.
+ * STEP 4: COMMIT BATCH SELECTIONS TO CART & RETURN TO MENU
+ */
+export async function handleCommitCategorySelections(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const updatedCart = await commitSelectionsToCart(restaurant.id, sender)
+  const responseText = `✅ Selected items added to your cart!\nCart Total: *₹${updatedCart?.total.toFixed(2)}* (${updatedCart?.item_count} items)`
+
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [
+        { id: "action_categories", title: "🍽️ View Menu" },
+        { id: "action_view_cart", title: "🛒 View Cart" },
+        { id: "cart_checkout", title: "✅ Checkout" },
+      ]
+    )
+  }
+
+  return { handled: true, responseText, intent: "batch_add_to_cart_success" }
+}
+
+/**
+ * STEP 6: VIEW CART SUMMARY
+ */
+export async function handleViewCart(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const cart = await getCartDetails(restaurant.id, sender)
+
+  if (!cart || cart.items.length === 0) {
+    const text = "Your cart is currently empty! 🍽️"
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        text,
+        [
+          { id: "action_categories", title: "🍽️ View Menu" },
+          { id: "action_initial_greeting", title: "🔙 Main Menu" },
+        ]
+      )
+    }
+    return { handled: true, responseText: text, intent: "cart_empty" }
+  }
+
+  const lines: string[] = []
+  lines.push(`🛒 *Your Cart at ${cart.restaurant_name}:*\n`)
+
+  cart.items.forEach((item, idx) => {
+    lines.push(`${idx + 1}. *${item.name}* (x${item.quantity}) - ₹${item.line_total.toFixed(2)}`)
+    if (item.variant_name) lines.push(`   • Size: ${item.variant_name}`)
+    if (item.addons_detail) lines.push(`   • Addons: ${item.addons_detail}`)
+    if (item.special_instructions) lines.push(`   • Note: _"${item.special_instructions}"_`)
+    if (!item.is_available) lines.push(`   ⚠️ _Item currently unavailable_`)
+  })
+
+  lines.push(`\n💵 *Subtotal:* ₹${cart.subtotal.toFixed(2)}`)
+  if (cart.delivery_fee > 0) {
+    lines.push(`🛵 *Delivery Fee:* ₹${cart.delivery_fee.toFixed(2)}`)
+  }
+  lines.push(`💰 *Total:* ₹${cart.total.toFixed(2)}`)
+
+  const responseText = lines.join("\n")
+
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [
+        { id: "action_edit_cart", title: "✏️ Edit Cart" },
+        { id: "action_categories", title: "🍽️ Continue Shopping" },
+        { id: "cart_checkout", title: "✅ Checkout" },
+      ]
+    )
+  }
+
+  return { handled: true, responseText, intent: "view_cart" }
+}
+
+/**
+ * STEP 7: EDIT CART
+ */
+export async function handleEditCart(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const cart = await getCartDetails(restaurant.id, sender)
+
+  if (!cart || cart.items.length === 0) {
+    return await handleViewCart(restaurant, sender)
+  }
+
+  const bodyText = "✏️ *Edit Cart Items*\nSelect an action below to modify quantities or remove items:"
+
+  if (restaurant.whatsapp_phone_number_id) {
+    const rows: Array<{ id: string; title: string; description?: string }> = []
+    cart.items.forEach((item) => {
+      rows.push({
+        id: `cart_inc_${item.id}`,
+        title: `➕ Add 1: ${item.name}`.slice(0, 24),
+        description: `Current quantity: ${item.quantity}`.slice(0, 72),
+      })
+      rows.push({
+        id: `cart_dec_${item.id}`,
+        title: `➖ Sub 1: ${item.name}`.slice(0, 24),
+        description: `Current quantity: ${item.quantity}`.slice(0, 72),
+      })
+      rows.push({
+        id: `cart_rem_${item.id}`,
+        title: `❌ Remove: ${item.name}`.slice(0, 24),
+        description: `Remove from cart`.slice(0, 72),
+      })
+      rows.push({
+        id: `add_note_prompt_${item.id}`,
+        title: `✍️ Note: ${item.name}`.slice(0, 24),
+        description: item.special_instructions ? `Current note: ${item.special_instructions}` : "Add special instruction",
+      })
+    })
+
+    if (rows.length <= 10) {
+      await sendWhatsAppInteractiveList(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        bodyText,
+        "Modify Cart",
+        [{ title: "Cart Actions", rows }]
+      )
+    } else {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        "To modify quantity, reply with e.g. *\"+1 1\"*, *\"-1 1\"*, or *\"remove 1\"*.",
+        [
+          { id: "action_view_cart", title: "🛒 View Cart" },
+          { id: "action_categories", title: "🍽️ View Menu" },
+        ]
+      )
+    }
+  }
+
+  return { handled: true, responseText: bodyText, intent: "edit_cart" }
+}
+
+/**
+ * Item Details view
  */
 export async function handleItemSelection(
   restaurant: ResolvedRestaurantInfo,
@@ -551,7 +811,7 @@ export async function handleItemSelection(
         restaurant.whatsapp_phone_number_id,
         sender,
         fallbackText,
-        [{ id: "action_main_menu", title: "📋 Main Menu" }]
+        [{ id: "action_categories", title: "📂 View Menu" }]
       )
     }
     return { handled: true, responseText: fallbackText, intent: "item_not_found" }
@@ -581,7 +841,7 @@ export async function handleItemSelection(
         baseDetails,
         [
           { id: `add_${item.id}`, title: "🛒 Add to Cart" },
-          { id: "action_main_menu", title: "📋 Menu" },
+          { id: "action_categories", title: "📂 View Menu" },
           { id: "action_view_cart", title: "🛍️ View Cart" },
         ]
       )
@@ -591,9 +851,6 @@ export async function handleItemSelection(
   return { handled: true, responseText: baseDetails, intent: "item_details" }
 }
 
-/**
- * Handles Add to Cart action for a specific menuItemId.
- */
 export async function handleAddToCartAction(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
@@ -610,7 +867,7 @@ export async function handleAddToCartAction(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        [{ id: "action_main_menu", title: "📋 Main Menu" }]
+        [{ id: "action_categories", title: "📂 View Menu" }]
       )
     }
   } else {
@@ -631,8 +888,8 @@ export async function handleAddToCartAction(
         responseText,
         [
           { id: `add_note_prompt_${cartItemId}`, title: "✍️ Add Note" },
+          { id: "action_categories", title: "🍽️ View Menu" },
           { id: "action_view_cart", title: "🛒 View Cart" },
-          { id: "cart_checkout", title: "💳 Checkout" },
         ]
       )
     }
@@ -641,9 +898,6 @@ export async function handleAddToCartAction(
   return { handled: true, responseText, intent: "add_to_cart" }
 }
 
-/**
- * Prompts user to type a special instruction note for a added cart item.
- */
 export async function handleAddNotePrompt(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
@@ -662,210 +916,10 @@ export async function handleAddNotePrompt(
   return { handled: true, responseText, intent: "awaiting_item_note" }
 }
 
-/**
- * Handles text-based Add to Cart commands ("add 1", "add biryani", "add <id>").
- */
-export async function handleAddToCartTextCommand(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string,
-  target: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const items = await getWhatsAppItems(restaurant.id)
-  let selectedItemId: string | undefined = undefined
-
-  const exactItem = items.find((i) => i.id === target)
-  if (exactItem) {
-    selectedItemId = exactItem.id
-  }
-
-  if (!selectedItemId && /^\d+$/.test(target)) {
-    const numIndex = parseInt(target, 10)
-    if (numIndex >= 1 && numIndex <= items.length) {
-      selectedItemId = items[numIndex - 1].id
-    }
-  }
-
-  if (!selectedItemId) {
-    const matched = items.find((i) => i.name.toLowerCase().includes(target.toLowerCase()))
-    if (matched) {
-      selectedItemId = matched.id
-    }
-  }
-
-  if (!selectedItemId) {
-    const responseText = `⚠️ Could not find item "${target}".`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [{ id: "action_main_menu", title: "📋 Main Menu" }]
-      )
-    }
-    return { handled: true, responseText, intent: "item_not_found" }
-  }
-
-  return await handleAddToCartAction(restaurant, sender, selectedItemId)
-}
-
-/**
- * Handles special instructions note command ("note 1 extra spicy").
- */
-export async function handleItemNoteCommand(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string,
-  rawText: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const cart = await getCartDetails(restaurant.id, sender)
-
-  if (!cart || cart.items.length === 0) {
-    const responseText = "Your cart is currently empty!"
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [{ id: "action_main_menu", title: "📋 Main Menu" }]
-      )
-    }
-    return { handled: true, responseText, intent: "cart_empty" }
-  }
-
-  const parts = rawText.trim().split(" ")
-  if (parts.length < 3) {
-    const responseText = `⚠️ Please specify item # and instruction, e.g.: *"note 1 less spicy"*`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
-    }
-    return { handled: true, responseText, intent: "invalid_note_format" }
-  }
-
-  const itemIdx = parseInt(parts[1], 10)
-  const instruction = parts.slice(2).join(" ")
-
-  if (isNaN(itemIdx) || itemIdx < 1 || itemIdx > cart.items.length) {
-    const responseText = `⚠️ Invalid item number "${parts[1]}". Please check your cart.`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
-    }
-    return { handled: true, responseText, intent: "invalid_cart_item_number" }
-  }
-
-  const targetCartItem = cart.items[itemIdx - 1]
-  await updateCartItemInstruction(targetCartItem.id, instruction)
-  return await handleViewCart(restaurant, sender)
-}
-
-/**
- * Handles View Cart request with interactive button options.
- */
-export async function handleViewCart(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const cart = await getCartDetails(restaurant.id, sender)
-
-  if (!cart || cart.items.length === 0) {
-    const text = "Your cart is currently empty! 🍽️"
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        text,
-        [
-          { id: "action_main_menu", title: "📋 Browse Menu" },
-          { id: "action_search_prompt", title: "🔍 Search" },
-        ]
-      )
-    }
-    return { handled: true, responseText: text, intent: "cart_empty" }
-  }
-
-  const responseText = formatCartText(cart)
-
-  if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      [
-        { id: "cart_checkout", title: "💳 Checkout" },
-        { id: "cart_manage", title: "⚙️ Modify Items" },
-        { id: "action_main_menu", title: "➕ Add More" },
-      ]
-    )
-  }
-
-  return { handled: true, responseText, intent: "view_cart" }
-}
-
-/**
- * Renders interactive list/buttons to manage individual items in cart (+, -, remove).
- */
-export async function handleCartManageOptions(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const cart = await getCartDetails(restaurant.id, sender)
-
-  if (!cart || cart.items.length === 0) {
-    return await handleViewCart(restaurant, sender)
-  }
-
-  const bodyText = "⚙️ Select a cart item action below:"
-
-  if (restaurant.whatsapp_phone_number_id) {
-    const rows: Array<{ id: string; title: string; description?: string }> = []
-    cart.items.forEach((item) => {
-      rows.push({
-        id: `cart_inc_${item.id}`,
-        title: `➕ Add 1: ${item.name}`.slice(0, 24),
-        description: `Current quantity: ${item.quantity}`.slice(0, 72),
-      })
-      rows.push({
-        id: `cart_dec_${item.id}`,
-        title: `➖ Sub 1: ${item.name}`.slice(0, 24),
-        description: `Current quantity: ${item.quantity}`.slice(0, 72),
-      })
-      rows.push({
-        id: `cart_rem_${item.id}`,
-        title: `❌ Remove: ${item.name}`.slice(0, 24),
-        description: `Remove completely from cart`.slice(0, 72),
-      })
-    })
-
-    if (rows.length <= 10) {
-      await sendWhatsAppInteractiveList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        bodyText,
-        "Modify Cart",
-        [{ title: "Cart Item Actions", rows }]
-      )
-    } else {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        "To modify quantity, reply with e.g. *\"+1 1\"*, *\"-1 1\"*, or *\"remove 1\"*.",
-        [
-          { id: "action_view_cart", title: "🛒 View Cart" },
-          { id: "cart_clear", title: "🧹 Clear Cart" },
-        ]
-      )
-    }
-  }
-
-  return { handled: true, responseText: bodyText, intent: "cart_manage" }
-}
-
-/**
- * Initiates Checkout process.
- */
 export async function handleInitiateCheckout(
   restaurant: ResolvedRestaurantInfo,
   sender: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  // 1. Validate Cart items for availability
   const validation = await validateCartForCheckout(restaurant.id, sender)
   if (!validation.valid) {
     const responseText = `⚠️ ${validation.error || "Cannot proceed with checkout."}`
@@ -881,14 +935,11 @@ export async function handleInitiateCheckout(
   }
 
   const cart = await getCartDetails(restaurant.id, sender)
-
   if (!cart || cart.items.length === 0) {
     return await handleViewCart(restaurant, sender)
   }
 
-  // Start conversational checkout
   await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_NAME")
-
   const responseText = "👤 Please reply with your *Full Name* for the delivery order:"
 
   if (restaurant.whatsapp_phone_number_id) {
@@ -898,9 +949,6 @@ export async function handleInitiateCheckout(
   return { handled: true, responseText, intent: "awaiting_name" }
 }
 
-/**
- * Formats and renders Order Confirmation screen.
- */
 export async function renderOrderConfirmation(
   restaurant: ResolvedRestaurantInfo,
   sender: string
@@ -939,8 +987,8 @@ export async function renderOrderConfirmation(
       responseText,
       [
         { id: "co_confirm", title: "✅ Confirm Order" },
+        { id: "action_edit_cart", title: "✏️ Edit Cart" },
         { id: "co_change_address", title: "📍 Change Address" },
-        { id: "co_cancel", title: "❌ Cancel" },
       ]
     )
   }
@@ -948,9 +996,6 @@ export async function renderOrderConfirmation(
   return { handled: true, responseText, intent: "order_confirmation_prompt" }
 }
 
-/**
- * Executes Order creation upon explicit confirmation ("confirm").
- */
 export async function handleFinalOrderCreation(
   restaurant: ResolvedRestaurantInfo,
   sender: string
@@ -991,7 +1036,7 @@ export async function handleFinalOrderCreation(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        [{ id: "action_main_menu", title: "📋 Main Menu" }]
+        [{ id: "action_initial_greeting", title: "🔙 Main Menu" }]
       )
     }
   }
@@ -999,9 +1044,6 @@ export async function handleFinalOrderCreation(
   return { handled: true, responseText, intent: result.success ? "order_created" : "order_creation_failed" }
 }
 
-/**
- * Handles Quantity Changes (+1 / -1) for cart items.
- */
 export async function handleCartQuantityChange(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
@@ -1012,9 +1054,6 @@ export async function handleCartQuantityChange(
   return await handleViewCart(restaurant, sender)
 }
 
-/**
- * Handles Cart Item Removal.
- */
 export async function handleCartItemRemoval(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
@@ -1024,9 +1063,6 @@ export async function handleCartItemRemoval(
   return await handleViewCart(restaurant, sender)
 }
 
-/**
- * Handles text commands like "+1 1", "-1 1", "remove 1".
- */
 export async function handleTextQuantityCommand(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
@@ -1070,4 +1106,152 @@ export async function handleTextQuantityCommand(
   } else {
     return await handleCartItemRemoval(restaurant, sender, targetCartItem.id)
   }
+}
+
+export async function handleItemNoteCommand(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string,
+  rawText: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const cart = await getCartDetails(restaurant.id, sender)
+
+  if (!cart || cart.items.length === 0) {
+    return await handleViewCart(restaurant, sender)
+  }
+
+  const parts = rawText.trim().split(" ")
+  if (parts.length < 3) {
+    const responseText = `⚠️ Please specify item # and instruction, e.g.: *"note 1 less spicy"*`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+    }
+    return { handled: true, responseText, intent: "invalid_note_format" }
+  }
+
+  const itemIdx = parseInt(parts[1], 10)
+  const instruction = parts.slice(2).join(" ")
+
+  if (isNaN(itemIdx) || itemIdx < 1 || itemIdx > cart.items.length) {
+    const responseText = `⚠️ Invalid item number "${parts[1]}". Please check your cart.`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+    }
+    return { handled: true, responseText, intent: "invalid_cart_item_number" }
+  }
+
+  const targetCartItem = cart.items[itemIdx - 1]
+  await updateCartItemInstruction(targetCartItem.id, instruction)
+  return await handleViewCart(restaurant, sender)
+}
+
+export async function handleAddToCartTextCommand(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string,
+  target: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const items = await getWhatsAppItems(restaurant.id)
+  let selectedItemId: string | undefined = undefined
+
+  const exactItem = items.find((i) => i.id === target)
+  if (exactItem) {
+    selectedItemId = exactItem.id
+  }
+
+  if (!selectedItemId && /^\d+$/.test(target)) {
+    const numIndex = parseInt(target, 10)
+    if (numIndex >= 1 && numIndex <= items.length) {
+      selectedItemId = items[numIndex - 1].id
+    }
+  }
+
+  if (!selectedItemId) {
+    const matched = items.find((i) => i.name.toLowerCase().includes(target.toLowerCase()))
+    if (matched) {
+      selectedItemId = matched.id
+    }
+  }
+
+  if (!selectedItemId) {
+    const responseText = `⚠️ Could not find item "${target}".`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        [{ id: "action_categories", title: "📂 View Menu" }]
+      )
+    }
+    return { handled: true, responseText, intent: "item_not_found" }
+  }
+
+  return await handleAddToCartAction(restaurant, sender, selectedItemId)
+}
+
+export async function handleSearchPrompt(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_SEARCH_QUERY")
+  const responseText = "🔍 What are you looking for?\n\nType the product name or keyword (e.g. *\"biryani\"*):"
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+  }
+  return { handled: true, responseText, intent: "search_prompt" }
+}
+
+export async function handleSearchResults(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string,
+  query: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const searchResults = await getWhatsAppItems(restaurant.id, { searchQuery: query })
+
+  if (searchResults.length === 0) {
+    const responseText = `🔍 No items found matching "${query}".`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        [
+          { id: "action_search_prompt", title: "🔍 Search Again" },
+          { id: "action_categories", title: "📂 View Menu" },
+        ]
+      )
+    }
+    return { handled: true, responseText, intent: "search_no_results" }
+  }
+
+  if (searchResults.length === 1) {
+    return await handleItemSelection(restaurant, sender, searchResults[0].id)
+  }
+
+  const responseText = `🔍 Search results for *"${query}"*:`
+
+  if (restaurant.whatsapp_phone_number_id) {
+    if (searchResults.length <= 10) {
+      const rows = searchResults.map((item) => ({
+        id: `item_${item.id}`,
+        title: item.name.slice(0, 24),
+        description: `${item.price_display}${item.description ? " - " + item.description : ""}`.slice(0, 72),
+      }))
+
+      await sendWhatsAppInteractiveList(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        "Select Item",
+        [{ title: "Matching Products", rows }]
+      )
+    } else {
+      const lines: string[] = [responseText + "\n"]
+      searchResults.forEach((item, idx) => {
+        lines.push(`${idx + 1}. ${item.name} - ${item.price_display}`)
+      })
+      lines.push(`\nReply item number to view details!`)
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, lines.join("\n"))
+    }
+  }
+
+  return { handled: true, responseText, intent: "search_results" }
 }

@@ -278,15 +278,31 @@ model WhatsAppCart {
   id                       String             @id @default(uuid())
   restaurant_id            String
   customer_whatsapp_number String
-  checkout_step            String?            // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION"
+  checkout_step            String?            // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION", etc.
   customer_name            String?
   delivery_address         String?
   created_at               DateTime           @default(now())
   updated_at               DateTime           @updatedAt
 
   items                    WhatsAppCartItem[]
+  selections               CategoryItemSelection[]
 
   @@unique([restaurant_id, customer_whatsapp_number])
+}
+
+model CategoryItemSelection {
+  id           String       @id @default(uuid())
+  cart_id      String
+  menu_item_id String
+  quantity     Int          @default(1)
+  variant_id   String?
+  addons       String?      // JSON array string
+  created_at   DateTime     @default(now())
+  updated_at   DateTime     @updatedAt
+
+  cart WhatsAppCart @relation(fields: [cart_id], references: [id], onDelete: Cascade)
+
+  @@unique([cart_id, menu_item_id])
 }
 
 model WhatsAppCartItem {

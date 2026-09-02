@@ -115,7 +115,7 @@ export async function runWhatsAppMenuBrowsingTests() {
 
     if (
       resGreeting.handled &&
-      resGreeting.intent === "main_menu" &&
+      resGreeting.intent === "initial_greeting" &&
       resGreeting.responseText.includes("Sagar Royal Hotel")
     ) {
       console.log("✓ PASS: Greeting returned Sagar Royal main menu interactive list\n")
@@ -134,7 +134,7 @@ export async function runWhatsAppMenuBrowsingTests() {
 
     if (
       resCatSelect.handled &&
-      resCatSelect.intent === "category_items" &&
+      (resCatSelect.intent === "category_items_selection" || resCatSelect.intent === "category_items") &&
       resCatSelect.responseText.includes("Biryani Specials")
     ) {
       console.log("✓ PASS: Category selection returned items list for 'Biryani Specials'\n")

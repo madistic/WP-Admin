@@ -9,7 +9,7 @@ const prismaClientSingleton = () => {
   const useSsl = isSslExplicit || (process.env.NODE_ENV === 'production' && !isLocal)
 
   const poolOptions: any = {
-    connectionString,
+    connectionString: connectionString || undefined,
   }
 
   if (useSsl) {

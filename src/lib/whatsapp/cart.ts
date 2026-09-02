@@ -19,6 +19,7 @@ export interface FormattedCartItem {
   addons_detail?: string
   special_instructions?: string
   is_available: boolean
+  is_veg?: boolean
 }
 
 export interface FormattedCartSummary {
@@ -122,6 +123,7 @@ export async function getCartDetails(
       addons_detail: addonsDetail,
       special_instructions: item.special_instructions || undefined,
       is_available: item.menuItem.is_available && item.menuItem.is_active,
+      is_veg: item.menuItem.is_veg,
     }
   })
 

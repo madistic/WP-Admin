@@ -135,7 +135,7 @@ export async function runWhatsAppMenuBrowsingTests() {
     if (
       resCatSelect.handled &&
       (resCatSelect.intent === "category_items_selection" || resCatSelect.intent === "category_items") &&
-      resCatSelect.responseText.includes("Biryani Specials")
+      resCatSelect.responseText.toUpperCase().includes("BIRYANI SPECIALS")
     ) {
       console.log("✓ PASS: Category selection returned items list for 'Biryani Specials'\n")
     } else {

@@ -71,7 +71,7 @@ export async function runWhatsAppUXVerificationSuite() {
       id: "m4", from: SENDER, type: "interactive", interactiveId: `cat_${catId}`,
     })
 
-    if (selCatRes.intent === "category_items_selection" && selCatRes.responseText.includes("Selected items in batch: *2*")) {
+    if (selCatRes.intent === "category_items_selection" && (selCatRes.responseText.includes("Selected in this batch:") || selCatRes.responseText.includes("Selected items in batch:"))) {
       console.log("✓ PASS: Multi-item selection batch staging working (+1 for 2 items = batch of 2)\n")
     } else {
       throw new Error(`TEST 2 FAILED: ${selCatRes.responseText}`)

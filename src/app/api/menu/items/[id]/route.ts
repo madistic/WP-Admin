@@ -75,6 +75,11 @@ export async function DELETE(
 
     if (!existing) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
 
+    // Sync out of stock/disabled status to Meta Catalog before DB delete
+    await syncMenuItemToMetaCatalog(existing.id).catch((err) =>
+      console.error("[Menu API] Catalog sync error on delete:", err)
+    )
+
     await prisma.menuItem.delete({
       where: { id: itemId },
     })

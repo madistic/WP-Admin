@@ -9,6 +9,7 @@ export interface WhatsAppCategoryFormat {
 
 export interface WhatsAppItemFormat {
   id: string
+  meta_product_sku?: string
   name: string
   description?: string
   price_display: string
@@ -42,6 +43,7 @@ export function formatCategoriesForWhatsApp(categories: Array<{ id: string; name
 export function formatItemsForWhatsApp(items: Array<any>): WhatsAppItemFormat[] {
   return items.map((item) => ({
     id: item.id,
+    meta_product_sku: item.meta_product_sku || undefined,
     name: `${item.is_veg ? "🟢" : "🔴"} ${item.name}`,
     description: item.description || undefined,
     price_display: `₹${item.price.toFixed(2)}`,

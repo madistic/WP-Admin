@@ -20,6 +20,8 @@ export interface MetaCatalogProductPayload {
  * - Batch product sync / upsert: POST /{catalog_id}/batch
  */
 
+export const GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION || "v21.0"
+
 /**
  * Syncs a single MenuItem with the restaurant's Meta Commerce Catalog.
  * Idempotent: uses item.id (or existing meta_product_sku) as retailer_id.
@@ -40,13 +42,26 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
 
     const retailerId = item.meta_product_sku || item.id
 
+    if (!catalogId || !token) {
+      const reason = !catalogId ? "Missing catalog ID" : "Missing Meta access token"
+      console.warn(`[Meta Catalog Sync] Item '${item.name}' (${retailerId}) NOT_CONFIGURED: ${reason}`)
+      await prisma.menuItem.update({
+        where: { id: menuItemId },
+        data: {
+          meta_product_sku: retailerId,
+          meta_sync_status: "NOT_CONFIGURED",
+          meta_sync_error: reason,
+        },
+      })
+      return { success: false, error: reason }
+    }
+
     // Fallback public image URL if item image is missing or relative
     const publicImageUrl = item.image_url && item.image_url.startsWith("http")
       ? item.image_url
       : "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop"
 
     const isAvailable = item.is_available && item.is_active
-    const formattedPrice = `${(item.price * 100).toFixed(0)} INR` // Meta API pricing format or standard currency string
 
     const productPayload: MetaCatalogProductPayload = {
       retailer_id: retailerId,
@@ -54,28 +69,14 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",
       condition: "new",
-      price: `${item.price.toFixed(2)} INR`,
+      price: `${(item.price * 100).toFixed(0)} INR`, // Meta Graph API batch catalog item price format in cents/paise
       currency: "INR",
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
     }
 
-    if (!catalogId || !token) {
-      console.log(`[Meta Catalog Sync MOCK] Item '${item.name}' (${retailerId}) ready for Catalog ${catalogId || "DEFAULT"}`)
-      await prisma.menuItem.update({
-        where: { id: menuItemId },
-        data: {
-          meta_product_sku: retailerId,
-          meta_sync_status: "SYNCED",
-          meta_sync_error: null,
-          meta_synced_at: new Date(),
-        },
-      })
-      return { success: true }
-    }
-
-    // Call Meta Graph API Catalog Batch Endpoint
-    const url = `https://graph.facebook.com/v21.0/${catalogId}/items`
+    // Call Meta Graph API Batch Endpoint ({catalog_id}/batch)
+    const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/batch`
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -121,6 +122,13 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
     return { success: true }
   } catch (error: any) {
     console.error("[Meta Catalog Sync Exception]:", error)
+    await prisma.menuItem.update({
+      where: { id: menuItemId },
+      data: {
+        meta_sync_status: "FAILED",
+        meta_sync_error: error?.message || "Unknown exception",
+      },
+    })
     return { success: false, error: error?.message || "Unknown error" }
   }
 }

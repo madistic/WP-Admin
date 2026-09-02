@@ -75,7 +75,8 @@ export async function sendWhatsAppCloudMessage(
     return { success: true, mock: true }
   }
 
-  const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`
+  const apiVersion = process.env.WHATSAPP_GRAPH_API_VERSION || "v21.0"
+  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`
 
   try {
     const res = await fetch(url, {

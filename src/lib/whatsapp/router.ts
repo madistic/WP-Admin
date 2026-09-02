@@ -327,17 +327,20 @@ export async function processIncomingWhatsAppMessage(
 
   if (interactiveId.startsWith("cart_inc_")) {
     const cartItemId = interactiveId.replace("cart_inc_", "")
-    return await handleCartQuantityChange(restaurant, sender, cartItemId, 1)
+    await updateCartItemQuantity(restaurant.id, sender, cartItemId, 1)
+    return await handleEditCart(restaurant, sender)
   }
 
   if (interactiveId.startsWith("cart_dec_")) {
     const cartItemId = interactiveId.replace("cart_dec_", "")
-    return await handleCartQuantityChange(restaurant, sender, cartItemId, -1)
+    await updateCartItemQuantity(restaurant.id, sender, cartItemId, -1)
+    return await handleEditCart(restaurant, sender)
   }
 
   if (interactiveId.startsWith("cart_rem_")) {
     const cartItemId = interactiveId.replace("cart_rem_", "")
-    return await handleCartItemRemoval(restaurant, sender, cartItemId)
+    await removeCartItem(restaurant.id, sender, cartItemId)
+    return await handleEditCart(restaurant, sender)
   }
 
   if (interactiveId === "cart_checkout" || interactiveId === "action_checkout" || cleanText === "checkout") {
@@ -361,7 +364,7 @@ export async function processIncomingWhatsAppMessage(
   // Check if user is replying with a special instruction note text
   if (cart && (cart.checkout_step as string).startsWith("AWAITING_NOTE_ITEM_")) {
     const cartItemId = (cart.checkout_step as string).replace("AWAITING_NOTE_ITEM_", "")
-    await updateCartItemInstruction(cartItemId, rawText)
+    await updateCartItemInstruction(restaurant.id, sender, cartItemId, rawText)
     await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
     const responseText = `📝 Note added: _"${rawText}"_`
     if (restaurant.whatsapp_phone_number_id) {
@@ -621,30 +624,55 @@ export async function handleNativeOrderMessage(
   sender: string,
   orderPayload: NonNullable<IncomingWhatsAppMessageData["orderPayload"]>
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  // Clear any existing cart items for a fresh native catalog order placement
-  await clearCart(restaurant.id, sender)
+  const catalogId = restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
 
+  // Tenant Catalog Validation
+  if (orderPayload.catalogId && catalogId && orderPayload.catalogId !== catalogId) {
+    const errorMsg = `⚠️ Catalog validation failed. The submitted catalog (${orderPayload.catalogId}) does not match this restaurant.`
+    console.warn(`[Native Order Error] Catalog mismatch for ${restaurant.name}: ${orderPayload.catalogId} vs ${catalogId}`)
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, errorMsg)
+    }
+    return { handled: true, responseText: errorMsg, intent: "native_order_failed" }
+  }
+
+  // Pre-validate all items before mutating/clearing existing cart
   const items = await getWhatsAppItems(restaurant.id)
-  let addedCount = 0
+  const validItemsToInsert: Array<{ menuItemId: string; quantity: number }> = []
 
   for (const itemPayload of orderPayload.productItems) {
     const sku = itemPayload.product_retailer_id
-    const qty = itemPayload.quantity
+    const qty = Number(itemPayload.quantity)
 
-    // Find matching item in DB by ID or meta_product_sku
-    const matchedItem = items.find((i) => i.id === sku || (i as any).meta_product_sku === sku)
-    if (matchedItem && qty > 0) {
-      await addToCart(restaurant.id, sender, matchedItem.id, { quantity: qty })
-      addedCount++
+    if (!sku || !Number.isInteger(qty) || qty <= 0) {
+      console.warn(`[Native Order Error] Invalid item payload or quantity:`, itemPayload)
+      continue
     }
+
+    // Find matching item belonging to THIS restaurant by id or meta_product_sku
+    const matchedItem = items.find((i) => i.id === sku || i.meta_product_sku === sku)
+
+    if (!matchedItem) {
+      console.warn(`[Native Order Error] Retailer ID '${sku}' does not belong to restaurant '${restaurant.id}'`)
+      continue
+    }
+
+    validItemsToInsert.push({ menuItemId: matchedItem.id, quantity: qty })
   }
 
-  if (addedCount === 0) {
-    const failText = "⚠️ We couldn't process the selected items from the menu. Please try selecting items again."
+  if (validItemsToInsert.length === 0) {
+    const failText = "⚠️ We couldn't process the selected items from the menu. Please try selecting active items from our menu."
     if (restaurant.whatsapp_phone_number_id) {
       await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, failText)
     }
     return { handled: true, responseText: failText, intent: "native_order_failed" }
+  }
+
+  // ALL items validated successfully -> NOW safe to replace cart
+  await clearCart(restaurant.id, sender)
+
+  for (const validItem of validItemsToInsert) {
+    await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity })
   }
 
   // Set cart step to checkout name / address collection
@@ -1268,7 +1296,7 @@ export async function handleCartQuantityChange(
   cartItemId: string,
   delta: number
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  await updateCartItemQuantity(cartItemId, delta, true)
+  await updateCartItemQuantity(restaurant.id, sender, cartItemId, delta, true)
   return await handleViewCart(restaurant, sender)
 }
 
@@ -1277,7 +1305,7 @@ export async function handleCartItemRemoval(
   sender: string,
   cartItemId: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  await removeCartItem(cartItemId)
+  await removeCartItem(restaurant.id, sender, cartItemId)
   return await handleViewCart(restaurant, sender)
 }
 
@@ -1358,7 +1386,7 @@ export async function handleItemNoteCommand(
   }
 
   const targetCartItem = cart.items[itemIdx - 1]
-  await updateCartItemInstruction(targetCartItem.id, instruction)
+  await updateCartItemInstruction(restaurant.id, sender, targetCartItem.id, instruction)
   return await handleViewCart(restaurant, sender)
 }
 

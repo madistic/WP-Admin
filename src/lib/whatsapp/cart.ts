@@ -247,16 +247,19 @@ export async function addToCart(
  * Updates special instructions / note for a specific cart item.
  */
 export async function updateCartItemInstruction(
+  restaurantId: string,
+  customerWhatsappNumber: string,
   cartItemId: string,
   instruction: string | null
 ): Promise<{ success: boolean; cart?: FormattedCartSummary; error?: string }> {
+  const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
   const item = await prisma.whatsAppCartItem.findUnique({
     where: { id: cartItemId },
     include: { cart: true },
   })
 
-  if (!item) {
-    return { success: false, error: "Cart item not found." }
+  if (!item || item.cart.restaurant_id !== restaurantId || item.cart.customer_whatsapp_number !== cleanPhone) {
+    return { success: false, error: "Cart item not found or unauthorized." }
   }
 
   await prisma.whatsAppCartItem.update({
@@ -274,16 +277,19 @@ export async function updateCartItemInstruction(
  * Updates cart item quantity (+1, -1, or set specific value). If quantity <= 0, removes item.
  */
 export async function updateCartItemQuantity(
+  restaurantId: string,
+  customerWhatsappNumber: string,
   cartItemId: string,
   deltaOrQuantity: number,
   isDelta: boolean = true
 ): Promise<{ success: boolean; cart?: FormattedCartSummary }> {
+  const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
   const item = await prisma.whatsAppCartItem.findUnique({
     where: { id: cartItemId },
     include: { cart: true },
   })
 
-  if (!item) {
+  if (!item || item.cart.restaurant_id !== restaurantId || item.cart.customer_whatsapp_number !== cleanPhone) {
     return { success: false }
   }
 
@@ -307,13 +313,18 @@ export async function updateCartItemQuantity(
 /**
  * Removes a specific item from the cart.
  */
-export async function removeCartItem(cartItemId: string): Promise<{ success: boolean; cart?: FormattedCartSummary }> {
+export async function removeCartItem(
+  restaurantId: string,
+  customerWhatsappNumber: string,
+  cartItemId: string
+): Promise<{ success: boolean; cart?: FormattedCartSummary }> {
+  const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
   const item = await prisma.whatsAppCartItem.findUnique({
     where: { id: cartItemId },
     include: { cart: true },
   })
 
-  if (!item) {
+  if (!item || item.cart.restaurant_id !== restaurantId || item.cart.customer_whatsapp_number !== cleanPhone) {
     return { success: false }
   }
 

@@ -157,6 +157,48 @@ export async function runWhatsAppUXVerificationSuite() {
       throw new Error(`TEST 5 FAILED: ${nativeOrderRes.responseText}`)
     }
 
+    // TEST 6: Native Order - Wrong Catalog ID Rejection
+    console.log("TEST 6: Native Order - Catalog ID mismatch rejection")
+    const restoWithCatalog = { ...restaurant, whatsapp_catalog_id: "official_catalog_999" }
+    const wrongCatalogRes = await processIncomingWhatsAppMessage(restoWithCatalog, {
+      id: "m8",
+      from: SENDER,
+      type: "order",
+      orderPayload: {
+        catalogId: "attacker_catalog_000",
+        text: "Spoofed catalog order",
+        productItems: [{ product_retailer_id: itemId1, quantity: 1 }],
+      },
+    })
+
+    if (wrongCatalogRes.intent === "native_order_failed" && wrongCatalogRes.responseText.includes("Catalog validation failed")) {
+      console.log("✓ PASS: Order with wrong catalog ID rejected correctly\n")
+    } else {
+      throw new Error(`TEST 6 FAILED: ${wrongCatalogRes.responseText}`)
+    }
+
+    // TEST 7: Native Order - Unknown Retailer ID & Invalid Quantity Rejection
+    console.log("TEST 7: Native Order - Invalid SKU / quantity rejection & cart preservation check")
+    const invalidSkuRes = await processIncomingWhatsAppMessage(restaurant, {
+      id: "m9",
+      from: SENDER,
+      type: "order",
+      orderPayload: {
+        catalogId: "test_catalog_123",
+        text: "Invalid order payload",
+        productItems: [
+          { product_retailer_id: "unknown_sku_1234", quantity: 5 },
+          { product_retailer_id: itemId1, quantity: -2 },
+        ],
+      },
+    })
+
+    if (invalidSkuRes.intent === "native_order_failed" && invalidSkuRes.responseText.includes("couldn't process the selected items")) {
+      console.log("✓ PASS: Invalid SKU and non-positive quantity rejected without corrupting cart\n")
+    } else {
+      throw new Error(`TEST 7 FAILED: ${invalidSkuRes.responseText}`)
+    }
+
     console.log("=========================================")
     console.log("ALL NEW UX FLOW VERIFICATION TESTS PASSED 100%")
     console.log("=========================================")

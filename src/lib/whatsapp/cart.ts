@@ -395,6 +395,38 @@ export async function getCategorySelections(restaurantId: string, customerWhatsa
   return { cartId: cart.id, selections }
 }
 
+export async function toggleCategorySelection(
+  restaurantId: string,
+  customerWhatsappNumber: string,
+  menuItemId: string
+) {
+  const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
+  const existing = await prisma.categoryItemSelection.findUnique({
+    where: {
+      cart_id_menu_item_id: {
+        cart_id: cart.id,
+        menu_item_id: menuItemId,
+      },
+    },
+  })
+
+  if (existing) {
+    await prisma.categoryItemSelection.delete({
+      where: { id: existing.id },
+    })
+  } else {
+    await prisma.categoryItemSelection.create({
+      data: {
+        cart_id: cart.id,
+        menu_item_id: menuItemId,
+        quantity: 1,
+      },
+    })
+  }
+
+  return await getCategorySelections(restaurantId, customerWhatsappNumber)
+}
+
 export async function updateCategorySelectionQuantity(
   restaurantId: string,
   customerWhatsappNumber: string,

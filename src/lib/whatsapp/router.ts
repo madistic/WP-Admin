@@ -21,6 +21,7 @@ import {
   validateCartForCheckout,
   createOrderFromCart,
   getCategorySelections,
+  toggleCategorySelection,
   updateCategorySelectionQuantity,
   commitSelectionsToCart,
   clearCategorySelections,
@@ -232,21 +233,50 @@ export async function processIncomingWhatsAppMessage(
     return await handleCategoryProductsSelection(restaurant, sender, categoryId)
   }
 
-  // Category Multi-Selection quantity adjustments (+ / -)
-  if (interactiveId.startsWith("sel_inc_")) {
-    const parts = interactiveId.replace("sel_inc_", "").split("_")
+  // Checkbox multi-selection toggle
+  if (interactiveId.startsWith("sel_toggle_")) {
+    const parts = interactiveId.replace("sel_toggle_", "").split("_")
     const categoryId = parts[0]
     const itemId = parts[1]
-    await updateCategorySelectionQuantity(restaurant.id, sender, itemId, 1)
+    await toggleCategorySelection(restaurant.id, sender, itemId)
     return await handleCategoryProductsSelection(restaurant, sender, categoryId)
   }
 
-  if (interactiveId.startsWith("sel_dec_")) {
-    const parts = interactiveId.replace("sel_dec_", "").split("_")
+  if (interactiveId.startsWith("continue_cat_")) {
+    const categoryId = interactiveId.replace("continue_cat_", "")
+    return await handleCategoryQuantityStep(restaurant, sender, categoryId, 0)
+  }
+
+  if (interactiveId.startsWith("qstep_inc_")) {
+    const parts = interactiveId.replace("qstep_inc_", "").split("_")
     const categoryId = parts[0]
-    const itemId = parts[1]
+    const itemIndex = parseInt(parts[1], 10)
+    const itemId = parts[2]
+    await updateCategorySelectionQuantity(restaurant.id, sender, itemId, 1)
+    return await handleCategoryQuantityStep(restaurant, sender, categoryId, itemIndex)
+  }
+
+  if (interactiveId.startsWith("qstep_dec_")) {
+    const parts = interactiveId.replace("qstep_dec_", "").split("_")
+    const categoryId = parts[0]
+    const itemIndex = parseInt(parts[1], 10)
+    const itemId = parts[2]
     await updateCategorySelectionQuantity(restaurant.id, sender, itemId, -1)
-    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
+    return await handleCategoryQuantityStep(restaurant, sender, categoryId, itemIndex)
+  }
+
+  if (interactiveId.startsWith("qstep_next_")) {
+    const parts = interactiveId.replace("qstep_next_", "").split("_")
+    const categoryId = parts[0]
+    const nextIndex = parseInt(parts[1], 10)
+    return await handleCategoryQuantityStep(restaurant, sender, categoryId, nextIndex)
+  }
+
+  if (interactiveId.startsWith("qstep_back_")) {
+    const parts = interactiveId.replace("qstep_back_", "").split("_")
+    const categoryId = parts[0]
+    const prevIndex = parseInt(parts[1], 10)
+    return await handleCategoryQuantityStep(restaurant, sender, categoryId, prevIndex)
   }
 
   if (interactiveId.startsWith("commit_cat_")) {
@@ -560,11 +590,10 @@ export async function handleCategoryProductsSelection(
   sender: string,
   categoryId: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const [categories, items, { selections }, cart] = await Promise.all([
+  const [categories, items, { selections }] = await Promise.all([
     getWhatsAppCategories(restaurant.id),
     getWhatsAppItems(restaurant.id, { categoryId }),
     getCategorySelections(restaurant.id, sender),
-    getCartDetails(restaurant.id, sender),
   ])
 
   const category = categories.find((c) => c.id === categoryId)
@@ -583,27 +612,25 @@ export async function handleCategoryProductsSelection(
     return { handled: true, responseText: text, intent: "category_empty" }
   }
 
-  const cartItemCount = (cart?.item_count || 0) + selections.reduce((sum, s) => sum + s.quantity, 0)
-  const totalSelectedInBatch = selections.reduce((sum, s) => sum + s.quantity, 0)
+  const lines: string[] = [`Select Items (*${catName.toUpperCase()}*)\n`]
 
-  const lines: string[] = [`📂 *${catName.toUpperCase()}*\n`]
+  items.forEach((item) => {
+    const isSelected = selections.some((s) => s.menu_item_id === item.id)
+    const checkIcon = isSelected ? "☑" : "☐"
+    const vegBadge = item.is_veg ? "🟢" : "🔴"
+    const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
 
-  items.forEach((item, idx) => {
-    const sel = selections.find((s) => s.menu_item_id === item.id)
-    const currentQty = sel ? sel.quantity : 0
-    const vegBadge = item.is_veg ? "🟢 VEG" : "🔴 NON-VEG"
-    const statusTag = currentQty > 0 ? "  |  *[ ✓ Added ]*" : "  |  *[ + Add ]*"
-
-    lines.push(`${idx + 1}. *${item.name.replace(/^[🟢🔴]\s*/, "")}*`)
-    lines.push(`   ${vegBadge}  •  *${item.price_display}*${statusTag}`)
+    lines.push(`${checkIcon} *${cleanName}* ${vegBadge}`)
+    lines.push(`   ${item.price_display}`)
     if (item.description) {
       lines.push(`   _${item.description.slice(0, 80)}${item.description.length > 80 ? "..." : ""}_`)
     }
     lines.push("")
   })
 
-  if (cart && cart.item_count > 0) {
-    lines.push(`🛒 *Cart:* ${cart.item_count} items • ₹${cart.total.toFixed(2)}`)
+  const selectedCount = selections.length
+  if (selectedCount > 0) {
+    lines.push(`Selected: *${selectedCount} item${selectedCount > 1 ? "s" : ""}*`)
   }
 
   const responseText = lines.join("\n")
@@ -612,23 +639,24 @@ export async function handleCategoryProductsSelection(
     if (items.length <= 8) {
       const rows: Array<{ id: string; title: string; description?: string }> = []
       items.forEach((item) => {
-        const sel = selections.find((s) => s.menu_item_id === item.id)
-        const currentQty = sel ? sel.quantity : 0
+        const isSelected = selections.some((s) => s.menu_item_id === item.id)
+        const checkIcon = isSelected ? "☑" : "☐"
         const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
-        const btnLabel = currentQty > 0 ? `[✓ Added] ${cleanName}` : `[+ Add] ${cleanName}`
 
         rows.push({
-          id: `sel_inc_${categoryId}_${item.id}`,
-          title: btnLabel.slice(0, 24),
-          description: `${item.price_display}${currentQty > 0 ? ` • Added x${currentQty}` : ""}`.slice(0, 72),
+          id: `sel_toggle_${categoryId}_${item.id}`,
+          title: `${checkIcon} ${cleanName}`.slice(0, 24),
+          description: `${item.price_display}${isSelected ? " • Selected" : ""}`.slice(0, 72),
         })
       })
 
-      rows.push({
-        id: `commit_cat_${categoryId}`,
-        title: "🛒 View Cart",
-        description: cartItemCount > 0 ? `Open Cart (${cartItemCount} items)` : "View cart items",
-      })
+      if (selectedCount > 0) {
+        rows.push({
+          id: `continue_cat_${categoryId}`,
+          title: "Continue →",
+          description: `Configure quantity for ${selectedCount} item${selectedCount > 1 ? "s" : ""}`,
+        })
+      }
 
       rows.push({
         id: "action_categories",
@@ -644,19 +672,120 @@ export async function handleCategoryProductsSelection(
         [{ title: catName.slice(0, 24), rows }]
       )
     } else {
+      const buttons: Array<{ id: string; title: string }> = []
+      if (selectedCount > 0) {
+        buttons.push({ id: `continue_cat_${categoryId}`, title: "Continue →" })
+      }
+      buttons.push({ id: "action_categories", title: "🍽️ Categories" })
+      buttons.push({ id: "action_view_cart", title: "🛒 View Cart" })
+
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        buttons
+      )
+    }
+  }
+
+  return { handled: true, responseText, intent: "category_items_selection" }
+}
+
+/**
+ * STEP 4: SEQUENTIAL ITEM QUANTITY CONFIGURATION (One Item at a Time)
+ */
+export async function handleCategoryQuantityStep(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string,
+  categoryId: string,
+  itemIndex: number
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const { selections } = await getCategorySelections(restaurant.id, sender)
+
+  if (selections.length === 0) {
+    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
+  }
+
+  // Handle index boundaries
+  if (itemIndex < 0) {
+    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
+  }
+
+  // All selected items configured -> show summary & commit options
+  if (itemIndex >= selections.length) {
+    const menuItems = await getWhatsAppItems(restaurant.id)
+    const lines: string[] = ["*Your Selected Items:*\n"]
+
+    let totalEstimate = 0
+    selections.forEach((sel) => {
+      const item = menuItems.find((i) => i.id === sel.menu_item_id)
+      const cleanName = item ? item.name.replace(/^[🟢🔴]\s*/, "") : "Item"
+      const price = item ? item.price : 0
+      const lineTotal = price * sel.quantity
+      totalEstimate += lineTotal
+      lines.push(`• *${cleanName}* × ${sel.quantity}  (₹${lineTotal.toFixed(2)})`)
+    })
+
+    lines.push(`\nSubtotal: *₹${totalEstimate.toFixed(2)}*`)
+    const responseText = lines.join("\n")
+
+    if (restaurant.whatsapp_phone_number_id) {
       await sendWhatsAppInteractiveButtons(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
         [
           { id: `commit_cat_${categoryId}`, title: "🛒 View Cart" },
-          { id: "action_categories", title: "🍽️ Menu" },
+          { id: `qstep_back_${categoryId}_${selections.length - 1}`, title: "← Back" },
+          { id: "action_categories", title: "Add More Items →" },
         ]
       )
     }
+
+    return { handled: true, responseText, intent: "category_quantity_summary" }
   }
 
-  return { handled: true, responseText, intent: "category_items_selection" }
+  // Active item configuration
+  const currentSel = selections[itemIndex]
+  const itemDetails = await getWhatsAppItemDetails(restaurant.id, currentSel.menu_item_id)
+  const cleanName = itemDetails ? itemDetails.name.replace(/^[🟢🔴]\s*/, "") : "Item"
+  const priceDisplay = itemDetails ? itemDetails.price_display : ""
+  const isLastItem = itemIndex === selections.length - 1
+  const nextBtnTitle = isLastItem ? "Done →" : "Next →"
+
+  const lines: string[] = []
+  lines.push("Set Quantity\n")
+  lines.push(`*${cleanName}*`)
+  if (priceDisplay) lines.push(`${priceDisplay} each\n`)
+  lines.push(`Quantity: *[ − ]  ${currentSel.quantity}  [ + ]*\n`)
+  lines.push(`Step ${itemIndex + 1} of ${selections.length}`)
+
+  const responseText = lines.join("\n")
+
+  if (restaurant.whatsapp_phone_number_id) {
+    const buttons: Array<{ id: string; title: string }> = [
+      { id: `qstep_inc_${categoryId}_${itemIndex}_${currentSel.menu_item_id}`, title: "[ + ] Increase" },
+    ]
+
+    if (currentSel.quantity > 1) {
+      buttons.push({ id: `qstep_dec_${categoryId}_${itemIndex}_${currentSel.menu_item_id}`, title: "[ − ] Decrease" })
+    } else if (itemIndex > 0) {
+      buttons.push({ id: `qstep_back_${categoryId}_${itemIndex - 1}`, title: "← Back" })
+    } else {
+      buttons.push({ id: `cat_${categoryId}`, title: "← Back to Items" })
+    }
+
+    buttons.push({ id: `qstep_next_${categoryId}_${itemIndex + 1}`, title: nextBtnTitle })
+
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      buttons.slice(0, 3) // Max 3 buttons in Meta API
+    )
+  }
+
+  return { handled: true, responseText, intent: "category_quantity_step" }
 }
 
 /**

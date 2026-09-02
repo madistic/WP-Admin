@@ -59,34 +59,44 @@ export async function runWhatsAppUXVerificationSuite() {
       throw new Error(`TEST 1 FAILED: ${greetingRes.responseText}`)
     }
 
-    // TEST 2: Multi-Item Category Selection (+ / -)
-    console.log("TEST 2: Customer opens category & adjusts item quantities (+1, +1, -1)")
+    // TEST 2: Multi-Item Category Checkbox Selection & Quantity Step
+    console.log("TEST 2: Customer toggles item checkboxes and taps 'Continue →'")
     await processIncomingWhatsAppMessage(restaurant, {
-      id: "m2", from: SENDER, type: "interactive", interactiveId: `sel_inc_${catId}_${itemId1}`,
+      id: "m2", from: SENDER, type: "interactive", interactiveId: `sel_toggle_${catId}_${itemId1}`,
     })
     await processIncomingWhatsAppMessage(restaurant, {
-      id: "m3", from: SENDER, type: "interactive", interactiveId: `sel_inc_${catId}_${itemId2}`,
+      id: "m3", from: SENDER, type: "interactive", interactiveId: `sel_toggle_${catId}_${itemId2}`,
     })
     const selCatRes = await processIncomingWhatsAppMessage(restaurant, {
       id: "m4", from: SENDER, type: "interactive", interactiveId: `cat_${catId}`,
     })
 
-    if (selCatRes.intent === "category_items_selection" && (selCatRes.responseText.includes("[ ✓ Added ]") || selCatRes.responseText.includes("[ + Add ]"))) {
-      console.log("✓ PASS: Category product addition ([+ Add] -> [✓ Added]) working\n")
+    if (selCatRes.intent === "category_items_selection" && (selCatRes.responseText.includes("☑") || selCatRes.responseText.includes("Paneer Tikka"))) {
+      console.log("✓ PASS: Category product multi-select checkbox (☐ -> ☑) working\n")
     } else {
       throw new Error(`TEST 2 FAILED: ${selCatRes.responseText}`)
     }
 
-    // TEST 3: Add to Cart Batch Commit
-    console.log("TEST 3: Customer taps 'Add to Cart'")
-    const commitRes = await processIncomingWhatsAppMessage(restaurant, {
-      id: "m5", from: SENDER, type: "interactive", interactiveId: `commit_cat_${catId}`,
+    // TEST 3: Sequential Quantity Step & Commit
+    console.log("TEST 3: Customer proceeds through quantity step and views cart")
+    const qStepRes = await processIncomingWhatsAppMessage(restaurant, {
+      id: "m5", from: SENDER, type: "interactive", interactiveId: `continue_cat_${catId}`,
     })
 
-    if (commitRes.intent === "batch_add_to_cart_success" && commitRes.responseText.includes("Cart Total: *₹525.00*")) {
-      console.log("✓ PASS: Batch items committed to cart (Subtotal ₹500 + Fee ₹25 = ₹525)\n")
+    if (qStepRes.intent === "category_quantity_step" && qStepRes.responseText.includes("Set Quantity")) {
+      console.log("✓ PASS: Sequential one-item-at-a-time quantity step presented\n")
     } else {
-      throw new Error(`TEST 3 FAILED: ${commitRes.responseText}`)
+      throw new Error(`TEST 3 FAILED: ${qStepRes.responseText}`)
+    }
+
+    const commitRes = await processIncomingWhatsAppMessage(restaurant, {
+      id: "m6", from: SENDER, type: "interactive", interactiveId: `commit_cat_${catId}`,
+    })
+
+    if (commitRes.intent === "batch_add_to_cart_success") {
+      console.log("✓ PASS: Selected items with configured quantities committed to cart\n")
+    } else {
+      throw new Error(`TEST 3 COMMIT FAILED: ${commitRes.responseText}`)
     }
 
     // TEST 4: Track Order Lookup

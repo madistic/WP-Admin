@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
 
 export async function PUT(
   request: Request,
@@ -44,6 +45,11 @@ export async function PUT(
         addons: true,
       },
     })
+
+    // Trigger Meta Catalog sync
+    syncMenuItemToMetaCatalog(updated.id).catch((err) =>
+      console.error("[Menu API] Catalog sync error on update:", err)
+    )
 
     return NextResponse.json(updated)
   } catch (error: any) {

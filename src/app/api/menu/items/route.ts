@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
 
 export async function POST(request: Request) {
   try {
@@ -76,6 +77,11 @@ export async function POST(request: Request) {
         addons: true,
       },
     })
+
+    // Trigger async Meta Commerce Catalog synchronization
+    syncMenuItemToMetaCatalog(item.id).catch((err) =>
+      console.error("[Menu API] Catalog sync error on create:", err)
+    )
 
     return NextResponse.json(item, { status: 201 })
   } catch (error: any) {

@@ -152,6 +152,9 @@ model MenuItem {
   price              Float
   image_url          String?
   meta_product_sku   String?   // Meta Commerce Catalog SKU / Retailer ID
+  meta_sync_status   String?   // SYNCED, FAILED, PENDING
+  meta_sync_error    String?
+  meta_synced_at     DateTime?
   is_available       Boolean   @default(true)
   is_active          Boolean   @default(true)
   is_veg             Boolean   @default(true)

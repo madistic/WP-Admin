@@ -443,9 +443,9 @@ export async function handleInitialGreeting(
 
   if (restaurant.whatsapp_phone_number_id) {
     if (catalogId) {
-      // Find a synced item with meta_product_sku to set as thumbnail_product_retailer_id
+      // Find a verified SYNCED item with meta_product_sku to set as thumbnail_product_retailer_id
       const items = await getWhatsAppItems(restaurant.id)
-      const syncedItem = items.find((i) => i.meta_product_sku && i.meta_product_sku.trim() !== "")
+      const syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
       const thumbnailRetailerId = syncedItem ? syncedItem.meta_product_sku : undefined
 
       await sendWhatsAppCatalogMessage(

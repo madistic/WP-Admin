@@ -142,7 +142,7 @@ export async function runWhatsAppUXVerificationSuite() {
       from: SENDER,
       type: "order",
       orderPayload: {
-        catalogId: "test_catalog_123",
+        catalogId: "1204719431867562",
         text: "Placing test catalog order",
         productItems: [
           { product_retailer_id: itemId1, quantity: 2 },
@@ -184,7 +184,7 @@ export async function runWhatsAppUXVerificationSuite() {
       from: SENDER,
       type: "order",
       orderPayload: {
-        catalogId: "test_catalog_123",
+        catalogId: "1204719431867562",
         text: "Invalid order payload",
         productItems: [
           { product_retailer_id: "unknown_sku_1234", quantity: 5 },
@@ -202,7 +202,7 @@ export async function runWhatsAppUXVerificationSuite() {
     // TEST 8: Catalog Message Payload Format Validation (No Empty parameters)
     console.log("TEST 8: Catalog message payload format validation")
     const { sendWhatsAppCatalogMessage } = await import("./client")
-    const mockRes = await sendWhatsAppCatalogMessage(PHONE_ID, SENDER, "Test catalog message", "1881755926567241")
+    const mockRes = await sendWhatsAppCatalogMessage(PHONE_ID, SENDER, "Test catalog message", "1204719431867562")
     if (mockRes.success || mockRes.mock || mockRes.response) {
       console.log("✓ PASS: sendWhatsAppCatalogMessage executed safely without empty parameters key\n")
     } else {

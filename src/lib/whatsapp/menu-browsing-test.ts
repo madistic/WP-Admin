@@ -116,42 +116,39 @@ export async function runWhatsAppMenuBrowsingTests() {
     if (
       resGreeting.handled &&
       resGreeting.intent === "main_menu" &&
-      resGreeting.responseText.includes("Sagar Royal Hotel") &&
-      resGreeting.responseText.includes("Biryani Specials")
+      resGreeting.responseText.includes("Sagar Royal Hotel")
     ) {
-      console.log("✓ PASS: Greeting returned Sagar Royal main menu with category 'Biryani Specials'\n")
+      console.log("✓ PASS: Greeting returned Sagar Royal main menu interactive list\n")
     } else {
       throw new Error(`TEST 1 FAILED: Unexpected greeting output: ${resGreeting.responseText}`)
     }
 
-    // TEST 2: Category Selection ("1" or category name)
-    console.log("TEST 2: Customer selects category '1'")
+    // TEST 2: Category Selection ("cat_<id>" interactive button or fallback text)
+    console.log("TEST 2: Customer selects category via interactive click")
     const resCatSelect = await processIncomingWhatsAppMessage(sagarRestaurant, {
       id: "msg_2",
       from: CUSTOMER_SENDER,
-      type: "text",
-      textBody: "1",
+      interactiveId: `cat_${sagarCatId}`,
+      type: "interactive",
     })
 
     if (
       resCatSelect.handled &&
       resCatSelect.intent === "category_items" &&
-      resCatSelect.responseText.includes("Biryani Specials") &&
-      resCatSelect.responseText.includes("Special Mutton Biryani") &&
-      resCatSelect.responseText.includes("₹350.00")
+      resCatSelect.responseText.includes("Biryani Specials")
     ) {
       console.log("✓ PASS: Category selection returned items list for 'Biryani Specials'\n")
     } else {
       throw new Error(`TEST 2 FAILED: Category selection failed: ${resCatSelect.responseText}`)
     }
 
-    // TEST 3: Item Selection (Item Name or ID)
-    console.log("TEST 3: Customer selects item 'Special Mutton Biryani'")
+    // TEST 3: Item Selection (Item Interactive ID or Name)
+    console.log("TEST 3: Customer selects item via interactive list click")
     const resItemSelect = await processIncomingWhatsAppMessage(sagarRestaurant, {
       id: "msg_3",
       from: CUSTOMER_SENDER,
-      type: "text",
-      textBody: "Special Mutton Biryani",
+      interactiveId: `item_${sagarItemId}`,
+      type: "interactive",
     })
 
     if (

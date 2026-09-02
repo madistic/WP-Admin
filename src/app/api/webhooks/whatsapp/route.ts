@@ -104,6 +104,16 @@ export async function POST(request: Request) {
             }
           }
 
+          let locationData: { latitude: number; longitude: number; name?: string; address?: string } | undefined = undefined
+          if (messageType === "location" && message?.location) {
+            locationData = {
+              latitude: message.location.latitude,
+              longitude: message.location.longitude,
+              name: message.location.name,
+              address: message.location.address,
+            }
+          }
+
           // Log resolved multi-tenant restaurant details securely
           console.log("[WhatsApp Webhook] Event Received & Resolved to Restaurant:", {
             restaurantId: restaurant.id,
@@ -115,6 +125,7 @@ export async function POST(request: Request) {
             type: messageType,
             textSnippet: textBody ? textBody.slice(0, 30) : undefined,
             interactiveId,
+            hasLocation: !!locationData,
             timestamp,
           })
 
@@ -127,6 +138,7 @@ export async function POST(request: Request) {
               textBody,
               interactiveId,
               interactiveTitle,
+              location: locationData,
             })
           }
         }

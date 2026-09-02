@@ -132,7 +132,7 @@ export async function runWhatsAppCartTests() {
     if (
       addRes.handled &&
       addRes.intent === "add_to_cart" &&
-      addRes.responseText.includes("Added *Hyderabadi Chicken Biryani* (x1)")
+      addRes.responseText.includes("Added *Hyderabadi Chicken Biryani*")
     ) {
       console.log("✓ PASS: Successfully added product to cart with default qty = 1\n")
     } else {

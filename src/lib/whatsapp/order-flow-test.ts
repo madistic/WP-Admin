@@ -200,8 +200,8 @@ export async function runWhatsAppOrderFlowTests() {
     // Add Butter Naan (x2 @ 50 = 100) -> New Subtotal should be 350 + 100 = 450 + 30 delivery = 480
     await addToCart(sagarId, CUSTOMER_SENDER, paneerId, { quantity: 2 })
 
-    // TEST 5: Full Checkout & Address Entry Flow
-    console.log("TEST 5: Initiate checkout & provide delivery address")
+    // TEST 5: Full Checkout & Conversational Address Entry Flow
+    console.log("TEST 5: Initiate checkout & complete conversational details entry")
     const coInitRes = await processIncomingWhatsAppMessage(sagarRestaurant, {
       id: "msg_co",
       from: CUSTOMER_SENDER,
@@ -209,18 +209,46 @@ export async function runWhatsAppOrderFlowTests() {
       textBody: "checkout",
     })
 
-    if (coInitRes.handled && coInitRes.intent === "awaiting_address") {
-      console.log("✓ PASS: System requested delivery address\n")
+    if (coInitRes.handled && coInitRes.intent === "awaiting_name") {
+      console.log("✓ PASS: System requested customer name\n")
     } else {
-      throw new Error(`TEST 5 FAILED: Expected address request: ${coInitRes.responseText}`)
+      throw new Error(`TEST 5 FAILED: Expected name request: ${coInitRes.responseText}`)
     }
 
-    console.log("Customer submits address: 'Rahul Sharma, 102 Beach Road, Sagar Street'")
+    console.log("Customer provides name: 'Rahul Sharma'")
+    const nameRes = await processIncomingWhatsAppMessage(sagarRestaurant, {
+      id: "msg_name",
+      from: CUSTOMER_SENDER,
+      type: "text",
+      textBody: "Rahul Sharma",
+    })
+
+    if (nameRes.handled && nameRes.intent === "awaiting_location_choice") {
+      console.log("✓ PASS: System presented location choice buttons\n")
+    } else {
+      throw new Error(`TEST 5 FAILED: Expected location choice: ${nameRes.responseText}`)
+    }
+
+    console.log("Customer selects manual address entry ('loc_enter_manual')")
+    const locChoiceRes = await processIncomingWhatsAppMessage(sagarRestaurant, {
+      id: "msg_loc_choice",
+      from: CUSTOMER_SENDER,
+      interactiveId: "loc_enter_manual",
+      type: "interactive",
+    })
+
+    if (locChoiceRes.handled && locChoiceRes.intent === "awaiting_manual_address") {
+      console.log("✓ PASS: System prompted for manual address entry\n")
+    } else {
+      throw new Error(`TEST 5 FAILED: Expected manual address prompt: ${locChoiceRes.responseText}`)
+    }
+
+    console.log("Customer submits address: '102 Beach Road, Sagar Street'")
     const addressRes = await processIncomingWhatsAppMessage(sagarRestaurant, {
       id: "msg_addr",
       from: CUSTOMER_SENDER,
       type: "text",
-      textBody: "Rahul Sharma, 102 Beach Road, Sagar Street",
+      textBody: "102 Beach Road, Sagar Street",
     })
 
     if (
@@ -236,12 +264,12 @@ export async function runWhatsAppOrderFlowTests() {
     }
 
     // TEST 6: Explicit Order Confirmation & DB Creation
-    console.log("TEST 6: Customer confirms order ('confirm')")
+    console.log("TEST 6: Customer confirms order ('co_confirm')")
     const confirmRes = await processIncomingWhatsAppMessage(sagarRestaurant, {
       id: "msg_confirm",
       from: CUSTOMER_SENDER,
-      type: "text",
-      textBody: "confirm",
+      interactiveId: "co_confirm",
+      type: "interactive",
     })
 
     if (

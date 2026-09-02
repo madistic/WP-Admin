@@ -8,6 +8,8 @@ import {
   sendWhatsAppTextMessage,
   sendWhatsAppInteractiveButtons,
   sendWhatsAppInteractiveList,
+  sendWhatsAppCatalogMessage,
+  sendWhatsAppMultiProductList,
 } from "./client"
 import {
   addToCart,
@@ -41,12 +43,23 @@ export interface IncomingWhatsAppMessageData {
     name?: string
     address?: string
   }
+  orderPayload?: {
+    catalogId?: string
+    text?: string
+    productItems: Array<{
+      product_retailer_id: string
+      quantity: number
+      item_price?: number
+      currency?: string
+    }>
+  }
 }
 
 export interface ResolvedRestaurantInfo {
   id: string
   name: string
   whatsapp_phone_number_id?: string | null
+  whatsapp_catalog_id?: string | null
 }
 
 /**
@@ -58,6 +71,11 @@ export async function processIncomingWhatsAppMessage(
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   const sender = message.from
   const rawText = (message.textBody || "").trim()
+
+  // Handle native Meta WhatsApp Order Payload message type
+  if (message.type === "order" && message.orderPayload) {
+    return await handleNativeOrderMessage(restaurant, sender, message.orderPayload)
+  }
   const interactiveId = message.interactiveId || ""
   const cleanText = rawText.toLowerCase()
 
@@ -418,16 +436,27 @@ export async function handleInitialGreeting(
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
   const responseText = `👋 Welcome to *${restaurant.name}*!\n\nWhat would you like to do?`
 
+  const catalogId = restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+
   if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      [
-        { id: "action_view_menu", title: "🍽️ Order Food" },
-        { id: "action_track_order_prompt", title: "📦 Track Order" },
-      ]
-    )
+    if (catalogId) {
+      await sendWhatsAppCatalogMessage(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        `👋 Welcome to *${restaurant.name}*!\nTap below to browse our full menu and place your order natively:`,
+        catalogId
+      )
+    } else {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        [
+          { id: "action_view_menu", title: "🍽️ Order Food" },
+          { id: "action_track_order_prompt", title: "📦 Track Order" },
+        ]
+      )
+    }
   }
 
   return { handled: true, responseText, intent: "initial_greeting" }
@@ -580,6 +609,55 @@ export async function handleCategoriesList(
   }
 
   return { handled: true, responseText: bodyText, intent: "categories_list" }
+}
+
+/**
+ * Handles incoming native WhatsApp Meta Catalog order payload (`messageType === "order"`).
+ * Parses product items, populates/validates items in cart, recalculates prices server-side,
+ * and proceeds directly to delivery address / checkout confirmation flow.
+ */
+export async function handleNativeOrderMessage(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string,
+  orderPayload: NonNullable<IncomingWhatsAppMessageData["orderPayload"]>
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  // Clear any existing cart items for a fresh native catalog order placement
+  await clearCart(restaurant.id, sender)
+
+  const items = await getWhatsAppItems(restaurant.id)
+  let addedCount = 0
+
+  for (const itemPayload of orderPayload.productItems) {
+    const sku = itemPayload.product_retailer_id
+    const qty = itemPayload.quantity
+
+    // Find matching item in DB by ID or meta_product_sku
+    const matchedItem = items.find((i) => i.id === sku || (i as any).meta_product_sku === sku)
+    if (matchedItem && qty > 0) {
+      await addToCart(restaurant.id, sender, matchedItem.id, { quantity: qty })
+      addedCount++
+    }
+  }
+
+  if (addedCount === 0) {
+    const failText = "⚠️ We couldn't process the selected items from the menu. Please try selecting items again."
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, failText)
+    }
+    return { handled: true, responseText: failText, intent: "native_order_failed" }
+  }
+
+  // Set cart step to checkout name / address collection
+  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_NAME")
+
+  const cart = await getCartDetails(restaurant.id, sender)
+  const responseText = `🛒 *Order Received from Catalog!*\n\nItems: ${cart?.item_count}\nSubtotal: *₹${cart?.subtotal.toFixed(2)}*\nDelivery Fee: *₹${cart?.delivery_fee.toFixed(2)}*\nTotal: *₹${cart?.total.toFixed(2)}*\n\nPlease reply with your *Full Name* to complete delivery setup:`
+
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+  }
+
+  return { handled: true, responseText, intent: "native_order_received" }
 }
 
 /**

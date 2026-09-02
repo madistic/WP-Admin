@@ -213,3 +213,68 @@ export async function sendWhatsAppInteractiveList(
 
   return await sendWhatsAppCloudMessage(phoneNumberId, payload)
 }
+
+/**
+ * Sends a native Meta Catalog message (opens full Meta Commerce Catalog)
+ */
+export async function sendWhatsAppCatalogMessage(
+  phoneNumberId: string,
+  to: string,
+  bodyText: string,
+  catalogId?: string,
+  thumbnailRetailerId?: string
+) {
+  const payload: any = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "catalog_message",
+      body: { text: bodyText },
+      action: {
+        name: "catalog_message",
+        parameters: thumbnailRetailerId ? { thumbnail_product_retailer_id: thumbnailRetailerId } : {},
+      },
+    },
+  }
+
+  return await sendWhatsAppCloudMessage(phoneNumberId, payload)
+}
+
+/**
+ * Sends a native Meta Multi-Product List message (opens native catalog UI in chat)
+ */
+export async function sendWhatsAppMultiProductList(
+  phoneNumberId: string,
+  to: string,
+  bodyText: string,
+  catalogId: string,
+  sections: Array<{
+    title: string
+    product_items: Array<{ product_retailer_id: string }>
+  }>,
+  options?: { headerText?: string; footerText?: string }
+) {
+  const payload: any = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "product_list",
+      header: options?.headerText ? { type: "text", text: options.headerText } : { type: "text", text: "Browse Menu" },
+      body: { text: bodyText },
+      footer: options?.footerText ? { text: options.footerText } : undefined,
+      action: {
+        catalog_id: catalogId,
+        sections: sections.map((sec) => ({
+          title: sec.title.slice(0, 24),
+          product_items: sec.product_items,
+        })),
+      },
+    },
+  }
+
+  return await sendWhatsAppCloudMessage(phoneNumberId, payload)
+}

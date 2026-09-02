@@ -114,6 +114,20 @@ export async function POST(request: Request) {
             }
           }
 
+          let orderPayload: { catalogId?: string; text?: string; productItems: Array<{ product_retailer_id: string; quantity: number; item_price?: number; currency?: string }> } | undefined = undefined
+          if (messageType === "order" && message?.order) {
+            orderPayload = {
+              catalogId: message.order.catalog_id,
+              text: message.order.text,
+              productItems: (message.order.product_items || []).map((p: any) => ({
+                product_retailer_id: p.product_retailer_id,
+                quantity: parseInt(p.quantity, 10) || 1,
+                item_price: p.item_price ? parseFloat(p.item_price) : undefined,
+                currency: p.currency,
+              })),
+            }
+          }
+
           // Log resolved multi-tenant restaurant details securely
           console.log("[WhatsApp Webhook] Event Received & Resolved to Restaurant:", {
             restaurantId: restaurant.id,
@@ -126,6 +140,7 @@ export async function POST(request: Request) {
             textSnippet: textBody ? textBody.slice(0, 30) : undefined,
             interactiveId,
             hasLocation: !!locationData,
+            hasOrder: !!orderPayload,
             timestamp,
           })
 
@@ -139,6 +154,7 @@ export async function POST(request: Request) {
               interactiveId,
               interactiveTitle,
               location: locationData,
+              orderPayload,
             })
           }
         }

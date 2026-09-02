@@ -135,6 +135,28 @@ export async function runWhatsAppUXVerificationSuite() {
       throw new Error(`TEST 4 FAILED: ${trackPromptRes.responseText}`)
     }
 
+    // TEST 5: Native WhatsApp Meta Catalog Order Payload Webhook Processing
+    console.log("TEST 5: Native Meta WhatsApp Catalog order payload processing (order message type)")
+    const nativeOrderRes = await processIncomingWhatsAppMessage(restaurant, {
+      id: "m7",
+      from: SENDER,
+      type: "order",
+      orderPayload: {
+        catalogId: "test_catalog_123",
+        text: "Placing test catalog order",
+        productItems: [
+          { product_retailer_id: itemId1, quantity: 2 },
+          { product_retailer_id: itemId2, quantity: 1 },
+        ],
+      },
+    })
+
+    if (nativeOrderRes.intent === "native_order_received" && nativeOrderRes.responseText.includes("Order Received from Catalog!")) {
+      console.log("✓ PASS: Native Meta WhatsApp Catalog order payload correctly parsed, validated against DB, and routed to checkout\n")
+    } else {
+      throw new Error(`TEST 5 FAILED: ${nativeOrderRes.responseText}`)
+    }
+
     console.log("=========================================")
     console.log("ALL NEW UX FLOW VERIFICATION TESTS PASSED 100%")
     console.log("=========================================")

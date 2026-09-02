@@ -21,6 +21,7 @@ export async function getRestaurantByWhatsAppPhoneNumberId(phoneNumberId: string
       phone: true,
       whatsapp_number: true,
       whatsapp_phone_number_id: true,
+      whatsapp_catalog_id: true,
       is_open: true,
       delivery_fee: true,
       minimum_order: true,

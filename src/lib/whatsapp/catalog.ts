@@ -69,7 +69,7 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",
       condition: "new",
-      price: `${(item.price * 100).toFixed(0)} INR`, // Meta Graph API batch catalog item price format in cents/paise
+      price: `${item.price.toFixed(2)} INR`,
       currency: "INR",
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",

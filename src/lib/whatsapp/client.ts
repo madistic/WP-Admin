@@ -225,6 +225,16 @@ export async function sendWhatsAppCatalogMessage(
   catalogId?: string,
   thumbnailRetailerId?: string
 ) {
+  const action: { name: string; parameters?: { thumbnail_product_retailer_id: string } } = {
+    name: "catalog_message",
+  }
+
+  if (thumbnailRetailerId && thumbnailRetailerId.trim() !== "") {
+    action.parameters = {
+      thumbnail_product_retailer_id: thumbnailRetailerId.trim(),
+    }
+  }
+
   const payload: any = {
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -233,10 +243,7 @@ export async function sendWhatsAppCatalogMessage(
     interactive: {
       type: "catalog_message",
       body: { text: bodyText },
-      action: {
-        name: "catalog_message",
-        parameters: thumbnailRetailerId ? { thumbnail_product_retailer_id: thumbnailRetailerId } : {},
-      },
+      action,
     },
   }
 

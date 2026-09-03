@@ -1,0 +1,1 @@
+import 'dotenv/config'; import prisma from '../src/lib/prisma'; async function run() { await prisma.menuItem.updateMany({ where: { restaurant_id: 'cd1feb68-b245-47e7-a92c-6de02f3fbbb9' }, data: { meta_sync_status: 'NOT_CONFIGURED', meta_product_sku: null } }); console.log('Reset complete'); } run();

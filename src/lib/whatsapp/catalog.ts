@@ -1,12 +1,11 @@
 import prisma from "@/lib/prisma"
 
 export interface MetaCatalogProductPayload {
-  retailer_id: string
   name: string
   description?: string
   availability: "in stock" | "out of stock"
   condition: "new"
-  price: number // Meta expects integer cents
+  price: number
   currency: "INR"
   url?: string
   image_url?: string
@@ -397,7 +396,6 @@ export async function syncMenuItemToMetaCatalog(
     const isAvailable = item.is_available && item.is_active
 
     const productPayload: MetaCatalogProductPayload = {
-      retailer_id: retailerId,
       name: item.name,
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",

@@ -1,0 +1,1 @@
+import 'dotenv/config'; import { syncRestaurantCatalog } from '../src/lib/whatsapp/catalog'; async function run() { const res = await syncRestaurantCatalog('cd1feb68-b245-47e7-a92c-6de02f3fbbb9'); console.log('Sync result:', res); } run();

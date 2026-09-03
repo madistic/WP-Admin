@@ -133,53 +133,82 @@ export async function checkProductExistsInMeta(
 }
 
 /**
- * Verifies a product exists in Meta Catalogue with retry + exponential back-off.
+ * Polls the Meta batch request status handle.
  *
- * Meta's catalog batch endpoint is asynchronous — a newly CREATEd product may
- * not appear in GET /{catalog_id}/products immediately after the batch POST
- * returns HTTP 200. This helper polls up to `maxAttempts` times, waiting
- * `initialDelayMs * 2^attempt` between each attempt.
- *
- * For UPDATE operations (product already existed) the first attempt will
- * typically succeed instantly; retries exist only as a safety net.
- *
- * Never logs the access token.
+ * Instead of waiting for products to appear in the paginated scan (which is subject
+ * to replication delays), we poll the batch handle returned by Meta.
+ * When `status === "finished"` and `errors_total_count === 0`, the product was
+ * successfully created/updated.
  */
-async function verifyWithRetry(
+async function verifyBatchHandle(
   catalogId: string,
   retailerId: string,
   itemName: string,
-  operation: "CREATE" | "UPDATE",
-  maxAttempts = 4,
+  handle: string,
+  maxAttempts = 5,
   initialDelayMs = 2000
-): Promise<{ exists: boolean; metaProductId?: string; error?: string }> {
+): Promise<{ success: boolean; error?: string }> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN
+  if (!token) return { success: false, error: "Missing access token" }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // For CREATE: always wait before first check — product is async in Meta.
-    // For UPDATE: attempt immediately first, then wait on retries.
-    if (operation === "CREATE" || attempt > 1) {
-      const delayMs = initialDelayMs * Math.pow(2, attempt - 1)
-      console.log(
-        `[Meta Catalog Verification] Waiting ${delayMs}ms before attempt ${attempt}/${maxAttempts} for '${itemName}' (retailer_id: ${retailerId})...`
-      )
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
-    }
-
-    const result = await checkProductExistsInMeta(catalogId, retailerId, itemName)
-    if (result.exists) {
-      console.log(
-        `[Meta Catalog Verification] Confirmed on attempt ${attempt}/${maxAttempts}: '${itemName}' (retailer_id: ${retailerId}) exists in catalog ${catalogId}`
-      )
-      return result
-    }
-
-    console.warn(
-      `[Meta Catalog Verification] Attempt ${attempt}/${maxAttempts} — NOT FOUND '${itemName}' (retailer_id: ${retailerId}) in catalog ${catalogId}`
+    const delayMs = initialDelayMs * attempt // linear/slight back-off: 2s, 4s, 6s, 8s
+    console.log(
+      `[Meta Catalog Batch Status] Polling handle '${handle}' for '${itemName}' (attempt ${attempt}/${maxAttempts}) in ${delayMs}ms...`
     )
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+
+    const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/check_batch_request_status?handle=${handle}&load_ids_of_invalid_requests=true&fields=handle,status,errors_total_count,ids_of_invalid_requests,warnings,errors`
+    
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json()
+      
+      if (!res.ok) {
+        console.warn(`[Meta Catalog Batch Status] HTTP ${res.status} checking handle: ${data?.error?.message || "Unknown error"}`)
+        continue // keep polling in case it's a transient failure
+      }
+
+      const statusData = data?.data?.[0]
+      if (!statusData) {
+        console.warn(`[Meta Catalog Batch Status] Invalid response format for handle '${handle}'`)
+        continue
+      }
+
+      // Log complete batch status response safely
+      console.log(`[Meta Catalog Batch Status] Full response for '${handle}':`, JSON.stringify(statusData, null, 2))
+
+      const { status, errors_total_count, ids_of_invalid_requests, errors } = statusData
+
+      if (status === "finished") {
+        if (errors_total_count === 0) {
+          console.log(`[Meta Catalog Batch Status] Handle '${handle}' finished SUCCESSFULLY for '${itemName}'`)
+          return { success: true }
+        } else {
+          const invalidIds = Array.isArray(ids_of_invalid_requests) ? ids_of_invalid_requests.join(", ") : "Unknown"
+          let detailedError = "Unknown item validation error"
+          if (Array.isArray(errors) && errors.length > 0) {
+             detailedError = errors.map((e: any) => e.message || JSON.stringify(e)).join(" | ")
+          }
+          const errMsg = `Batch rejected by Meta. Invalid IDs: ${invalidIds}. Errors: ${detailedError}`
+          console.error(`[Meta Catalog Batch Status] Handle '${handle}' finished with ERRORS for '${itemName}': ${errMsg}`)
+          return { success: false, error: errMsg }
+        }
+      } else if (status === "error") {
+         return { success: false, error: `Batch processing failed with status 'error'` }
+      }
+      
+      // If status is "in_progress" or "queued", continue loop...
+    } catch (err: any) {
+      console.warn(`[Meta Catalog Batch Status] Exception checking handle '${handle}': ${err.message}`)
+    }
   }
 
   return {
-    exists: false,
-    error: `Product '${retailerId}' not found in Meta after ${maxAttempts} verification attempts (${operation})`,
+    success: false,
+    error: `Timeout waiting for batch handle '${handle}' to finish after ${maxAttempts} attempts.`,
   }
 }
 
@@ -459,9 +488,20 @@ export async function syncMenuItemToMetaCatalog(
       category: item.category?.name || "Food & Beverages",
     }
 
+    const batchRequestPayload = {
+      requests: [
+        {
+          method: batchMethod,
+          retailer_id: retailerId,
+          data: productPayload,
+        },
+      ],
+    }
+
     console.log(
       `[Meta Catalog Sync] ${batchMethod} '${item.name}' (retailer_id: ${retailerId}, restaurant: ${item.restaurant.name}, catalog: ${catalogId})`
     )
+    console.log(`[Meta Catalog Sync] Exact Batch Payload for '${item.name}':`, JSON.stringify(batchRequestPayload, null, 2))
 
     // -----------------------------------------------------------------------
     // Step 2: Send batch request
@@ -476,15 +516,7 @@ export async function syncMenuItemToMetaCatalog(
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          requests: [
-            {
-              method: batchMethod,
-              retailer_id: retailerId,
-              data: productPayload,
-            },
-          ],
-        }),
+        body: JSON.stringify(batchRequestPayload),
       })
 
       batchData = await batchRes.json()
@@ -577,22 +609,35 @@ export async function syncMenuItemToMetaCatalog(
     }
 
     // -----------------------------------------------------------------------
-    // Step 4: Verify product exists in Meta — with retry+back-off for CREATE.
-    // Meta catalog product availability after a batch POST is asynchronous.
-    // We poll up to 4 times (2s → 4s → 8s → 16s) before declaring failure.
+    // Step 4: Verify batch success via the handle OR fallback to scan
     // -----------------------------------------------------------------------
     console.log(
       `[Meta Catalog Verification] Starting verification for '${item.name}' (retailer_id: ${retailerId}) after ${batchMethod}...`
     )
 
-    const verification = await verifyWithRetry(catalogId, retailerId, item.name, batchMethod)
+    let isVerified = false
+    let verifyError = ""
 
-    if (!verification.exists) {
-      const errMsg =
-        verification.error ||
-        `Product '${retailerId}' not found in Meta Catalogue after ${batchMethod}`
+    const batchHandle = Array.isArray(batchData?.handles) && batchData.handles.length > 0 
+      ? batchData.handles[0] 
+      : null;
+
+    if (batchHandle) {
+      const handleCheck = await verifyBatchHandle(catalogId, retailerId, item.name, batchHandle)
+      isVerified = handleCheck.success
+      if (!isVerified) verifyError = handleCheck.error || "Batch handle verification failed"
+    } else {
+      console.warn(`[Meta Catalog Verification] No handle returned in batch response. Falling back to paginated scan for '${item.name}'.`)
+      await new Promise(r => setTimeout(r, 3000));
+      const scanCheck = await checkProductExistsInMeta(catalogId, retailerId, item.name)
+      isVerified = scanCheck.exists
+      if (!isVerified) verifyError = scanCheck.error || "Product not found in paginated scan fallback"
+    }
+
+    if (!isVerified) {
+      const errMsg = verifyError || `Product '${retailerId}' failed verification after ${batchMethod}`
       console.error(
-        `[Meta Catalog Sync Failed] '${item.name}' (retailer_id: ${retailerId}, catalog: ${catalogId}) all verification attempts exhausted: ${errMsg}`
+        `[Meta Catalog Sync Failed] '${item.name}' (retailer_id: ${retailerId}, catalog: ${catalogId}) verification failed: ${errMsg}`
       )
       await prisma.menuItem.update({
         where: { id: menuItemId },
@@ -603,6 +648,15 @@ export async function syncMenuItemToMetaCatalog(
         },
       })
       return { success: false, error: errMsg }
+    }
+
+    // Double check that it actually exists in the catalog via GET /products if it succeeded
+    // According to Meta, if the batch succeeds, it should be in the catalog shortly.
+    console.log(`[Meta Catalog Verification] Batch confirmed success. Performing final live scan for '${item.name}'...`)
+    await new Promise(r => setTimeout(r, 2000)); // give it a moment to appear
+    const finalScan = await checkProductExistsInMeta(catalogId, retailerId, item.name)
+    if (!finalScan.exists) {
+       console.warn(`[Meta Catalog Verification] Product '${item.name}' batch succeeded, but not found in immediate scan. It may take a few more seconds to appear. Proceeding to mark SYNCED since batch passed.`)
     }
 
     // -----------------------------------------------------------------------

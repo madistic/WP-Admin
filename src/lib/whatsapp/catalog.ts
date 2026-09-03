@@ -475,7 +475,7 @@ export async function syncMenuItemToMetaCatalog(
 
     const isAvailable = item.is_available && item.is_active
 
-    const productPayload: MetaCatalogProductPayload = {
+    const productPayload: any = {
       name: item.name,
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",
@@ -486,6 +486,20 @@ export async function syncMenuItemToMetaCatalog(
       brand: item.restaurant.name,
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
+    }
+
+    // Add Meta Locality Fields required for product validation
+    if (item.restaurant.pincode) {
+      productPayload.availability_postal_codes = [item.restaurant.pincode]
+    } else {
+      productPayload.availability_circle_radius = item.restaurant.delivery_radius > 0 ? item.restaurant.delivery_radius : 5
+      productPayload.availability_circle_radius_unit = "KM"
+      productPayload.address = {
+        street1: item.restaurant.address || "Main Street",
+        city: item.restaurant.city || "Mumbai",
+        region: item.restaurant.state || "MH",
+        country: "IN",
+      }
     }
 
     const batchRequestPayload = {

@@ -476,26 +476,33 @@ export async function handleInitialGreeting(
       }
     }
 
-    // Step 2: If no live-verified item, trigger a full catalog sync and re-verify
+    // Step 2: If no live-verified item, trigger a full catalog sync ONLY IF it is a fresh initialization.
+    // If a sync was previously attempted (even if FAILED), do not retry the entire catalog on every "Hi".
     if (!verifiedRetailerId) {
-      console.log(
-        `[WhatsApp Router] No live-verified Meta product for '${restaurant.name}'. Triggering catalog sync...`
-      )
-      await syncRestaurantCatalog(restaurant.id)
-      items = await getWhatsAppItems(restaurant.id)
+      const hasAttemptedSync = items.some((i) => i.meta_sync_status !== null)
 
-      const refreshedItems = items.filter(
-        (i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== ""
-      )
-      for (const candidate of refreshedItems) {
-        const liveCheck = await checkProductExistsInMeta(catalogId, candidate.meta_product_sku!, candidate.name)
-        if (liveCheck.exists) {
-          verifiedRetailerId = candidate.meta_product_sku!
-          console.log(
-            `[WhatsApp Router] Post-sync live Meta verification PASSED for '${candidate.name}' (retailer_id: ${verifiedRetailerId})`
-          )
-          break
+      if (!hasAttemptedSync && items.length > 0) {
+        console.log(
+          `[WhatsApp Router] Fresh initialization for '${restaurant.name}'. Triggering first-time catalog sync...`
+        )
+        await syncRestaurantCatalog(restaurant.id)
+        items = await getWhatsAppItems(restaurant.id)
+
+        const refreshedItems = items.filter(
+          (i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== ""
+        )
+        for (const candidate of refreshedItems) {
+          const liveCheck = await checkProductExistsInMeta(catalogId, candidate.meta_product_sku!, candidate.name)
+          if (liveCheck.exists) {
+            verifiedRetailerId = candidate.meta_product_sku!
+            console.log(
+              `[WhatsApp Router] Post-sync live Meta verification PASSED for '${candidate.name}' (retailer_id: ${verifiedRetailerId})`
+            )
+            break
+          }
         }
+      } else {
+        console.log(`[WhatsApp Router] No live-verified Meta product for '${restaurant.name}', and sync was previously attempted. Skipping auto-sync to prevent infinite loops.`)
       }
     }
 

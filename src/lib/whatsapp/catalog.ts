@@ -488,44 +488,6 @@ export async function syncMenuItemToMetaCatalog(
       category: item.category?.name || "Food & Beverages",
     }
 
-    // ---------------------------------------------------------------------------
-    // Meta Locality Fields — required by Meta catalog template.
-    // Field names MUST match Meta's official template exactly.
-    // We use only existing DB columns; no new schema columns, no hardcoded data.
-    // ---------------------------------------------------------------------------
-    const deliveryRadius =
-      item.restaurant.delivery_radius > 0 ? item.restaurant.delivery_radius : 5
-
-    const hasPincode =
-      item.restaurant.pincode && item.restaurant.pincode.trim() !== ""
-    const hasAddress =
-      item.restaurant.address && item.restaurant.address.trim() !== ""
-    const hasCity =
-      item.restaurant.city && item.restaurant.city.trim() !== ""
-
-    // Build the Meta `address` object from existing DB columns when available.
-    // Keys match Meta's catalog template: city, country, postal_code, region,
-    // street_address.
-    if (hasAddress || hasCity || hasPincode) {
-      const metaAddress: Record<string, string> = {}
-      if (hasAddress)
-        metaAddress.street_address = item.restaurant.address!.trim()
-      if (hasCity)
-        metaAddress.city = item.restaurant.city!.trim()
-      if (item.restaurant.state && item.restaurant.state.trim() !== "")
-        metaAddress.region = item.restaurant.state.trim()
-      if (hasPincode)
-        metaAddress.postal_code = item.restaurant.pincode!.trim()
-      // "IN" is ISO 3166-1 alpha-2 for India — matches the restaurant's locale.
-      metaAddress.country = "IN"
-      productPayload.address = metaAddress
-    }
-
-    // availability_circle_radius / availability_circle_radius_unit
-    // Use the restaurant's configured delivery_radius (default 5 km).
-    // "km" is the value Meta's template expects (lowercase).
-    productPayload.availability_circle_radius = deliveryRadius
-    productPayload.availability_circle_radius_unit = "km"
 
     const batchRequestPayload = {
       requests: [

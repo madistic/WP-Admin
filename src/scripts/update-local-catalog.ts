@@ -12,10 +12,10 @@ async function updateLocalDbCatalog() {
 
     const res = await client.query(`
       UPDATE "Restaurant" 
-      SET "whatsapp_catalog_id" = '1204719431867562' 
-      WHERE "whatsapp_catalog_id" IS NULL OR "whatsapp_catalog_id" != '1204719431867562';
+      SET "whatsapp_catalog_id" = '2017236685593662' 
+      WHERE "whatsapp_catalog_id" IS NULL OR "whatsapp_catalog_id" != '2017236685593662';
     `);
-    console.log(`✓ Updated ${res.rowCount} restaurant record(s) with whatsapp_catalog_id = 1204719431867562`);
+    console.log(`✓ Updated ${res.rowCount} restaurant record(s) with whatsapp_catalog_id = 2017236685593662`);
 
     const check = await client.query(`SELECT id, name, "whatsapp_catalog_id" FROM "Restaurant";`);
     console.log('Current Restaurants in Local DB:', check.rows);

@@ -13,7 +13,7 @@ async function runInitialCatalogSync() {
   console.log(`Found ${restaurants.length} restaurant(s) in PostgreSQL database.\n`)
 
   for (const r of restaurants) {
-    const catalogId = r.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID || "1204719431867562"
+    const catalogId = r.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID || "2017236685593662"
     console.log(`Syncing menu items for '${r.name}' (Catalog ID: ${catalogId})...`)
 
     const result = await syncRestaurantCatalog(r.id)

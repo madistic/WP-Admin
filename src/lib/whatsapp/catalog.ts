@@ -6,9 +6,9 @@ export interface MetaCatalogProductPayload {
   description?: string
   availability: "in stock" | "out of stock"
   condition: "new"
-  price: string // e.g. "280.00 INR"
-  currency: string
-  link?: string
+  price: number // Meta expects integer cents
+  currency: "INR"
+  url?: string
   image_url?: string
   brand?: string
   category?: string
@@ -402,8 +402,10 @@ export async function syncMenuItemToMetaCatalog(
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",
       condition: "new",
-      price: `${item.price.toFixed(2)} INR`,
+      price: Math.round(item.price * 100),
       currency: "INR",
+      url: `https://wa.me/${item.restaurant.whatsapp_phone_number_id || ""}`,
+      brand: item.restaurant.name,
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
     }

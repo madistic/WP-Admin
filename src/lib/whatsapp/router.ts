@@ -446,36 +446,49 @@ export async function handleInitialGreeting(
       let items = await getWhatsAppItems(restaurant.id)
       let syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
 
-      // Auto-bootstrap: if no item is marked SYNCED yet, attempt catalog sync for restaurant
+      // Auto-bootstrap: if no item is marked SYNCED yet, verify catalog access & attempt catalog sync for restaurant
       if (!syncedItem) {
-        console.log(`[WhatsApp Router] No SYNCED catalog items found for '${restaurant.name}'. Triggering catalog sync...`)
-        const { syncRestaurantCatalog } = await import("./catalog")
-        await syncRestaurantCatalog(restaurant.id)
-        items = await getWhatsAppItems(restaurant.id)
-        syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+        console.log(`[WhatsApp Router] No SYNCED catalog items found for '${restaurant.name}'. Verifying catalog access and triggering catalog sync...`)
+        const { syncRestaurantCatalog, checkCatalogAccess } = await import("./catalog")
+        const accessCheck = await checkCatalogAccess(catalogId)
+
+        if (accessCheck.accessible) {
+          await syncRestaurantCatalog(restaurant.id)
+          items = await getWhatsAppItems(restaurant.id)
+          syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+        } else {
+          console.warn(`[WhatsApp Router] Catalog ID '${catalogId}' is not accessible (${accessCheck.error}). Falling back to interactive buttons flow.`)
+        }
       }
 
-      const thumbnailRetailerId = syncedItem ? syncedItem.meta_product_sku : undefined
-      console.log(`[WhatsApp Router] Sending catalog message for '${restaurant.name}' (Catalog ID: ${catalogId}, Thumbnail Retailer ID: ${thumbnailRetailerId || "NONE"})`)
+      // ONLY send catalog_message if at least one item is confirmed SYNCED in Meta Catalog
+      if (syncedItem) {
+        const thumbnailRetailerId = syncedItem.meta_product_sku
+        console.log(`[WhatsApp Router] Sending catalog message for '${restaurant.name}' (Catalog ID: ${catalogId}, Thumbnail Retailer ID: ${thumbnailRetailerId})`)
 
-      await sendWhatsAppCatalogMessage(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        `👋 Welcome to *${restaurant.name}*!\nTap below to browse our full menu and place your order natively:`,
-        catalogId,
-        thumbnailRetailerId
-      )
-    } else {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [
-          { id: "action_view_menu", title: "🍽️ Order Food" },
-          { id: "action_track_order_prompt", title: "📦 Track Order" },
-        ]
-      )
+        await sendWhatsAppCatalogMessage(
+          restaurant.whatsapp_phone_number_id,
+          sender,
+          `👋 Welcome to *${restaurant.name}*!\nTap below to browse our full menu and place your order natively:`,
+          catalogId,
+          thumbnailRetailerId
+        )
+        return { handled: true, responseText, intent: "initial_greeting" }
+      } else {
+        console.warn(`[WhatsApp Router] Zero SYNCED items available for '${restaurant.name}'. Falling back to interactive buttons flow to prevent Meta Error #131009.`)
+      }
     }
+
+    // Fallback interactive buttons flow when catalog is not configured, inaccessible, or has zero SYNCED products
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [
+        { id: "action_view_menu", title: "🍽️ Order Food" },
+        { id: "action_track_order_prompt", title: "📦 Track Order" },
+      ]
+    )
   }
 
   return { handled: true, responseText, intent: "initial_greeting" }

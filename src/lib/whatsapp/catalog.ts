@@ -23,6 +23,32 @@ export interface MetaCatalogProductPayload {
 export const GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_API_VERSION || "v21.0"
 
 /**
+ * Preflight check to verify if the catalog ID is accessible with the current access token.
+ */
+export async function checkCatalogAccess(catalogId: string): Promise<{ accessible: boolean; error?: string }> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN
+  if (!catalogId || !token) {
+    return { accessible: false, error: "Missing catalog ID or access token" }
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}?fields=id,name`
+  try {
+    const res = await fetch(url, {
+      headers: { "Authorization": `Bearer ${token}` }
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      console.error(`[Meta Catalog Check Error] Catalog ID '${catalogId}' check failed (${res.status}):`, data)
+      return { accessible: false, error: data?.error?.message || `HTTP ${res.status}` }
+    }
+    return { accessible: true }
+  } catch (err: any) {
+    console.error(`[Meta Catalog Check Exception] Catalog ID '${catalogId}' check failed:`, err)
+    return { accessible: false, error: err?.message || "Unknown error" }
+  }
+}
+
+/**
  * Syncs a single MenuItem with the restaurant's Meta Commerce Catalog.
  * Idempotent: uses item.id (or existing meta_product_sku) as retailer_id.
  */
@@ -77,6 +103,8 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
 
     // Call Meta Graph API Batch Endpoint ({catalog_id}/batch)
     const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/batch`
+    console.log(`[Meta Catalog Sync] Posting batch update for '${item.name}' (retailer_id: ${retailerId}) to Endpoint: ${url}`)
+
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -97,7 +125,7 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
     const data = await res.json()
 
     if (!res.ok) {
-      console.error(`[Meta Catalog Sync Error] Failed to sync ${item.name}:`, data)
+      console.error(`[Meta Catalog Sync Error] Failed to sync '${item.name}' (retailer_id: ${retailerId}, HTTP ${res.status}):`, data)
       await prisma.menuItem.update({
         where: { id: menuItemId },
         data: {
@@ -118,7 +146,7 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
       },
     })
 
-    console.log(`[Meta Catalog Sync Success] Synced item '${item.name}' to Catalog ${catalogId}`)
+    console.log(`[Meta Catalog Sync Success] Synced item '${item.name}' (retailer_id: ${retailerId}) to Catalog ${catalogId}`)
     return { success: true }
   } catch (error: any) {
     console.error("[Meta Catalog Sync Exception]:", error)
@@ -139,7 +167,19 @@ export async function syncMenuItemToMetaCatalog(menuItemId: string): Promise<{ s
 export async function syncRestaurantCatalog(restaurantId: string): Promise<{ total: number; synced: number; failed: number }> {
   const items = await prisma.menuItem.findMany({
     where: { restaurant_id: restaurantId },
+    include: { restaurant: true },
   })
+
+  if (items.length === 0) return { total: 0, synced: 0, failed: 0 }
+
+  const catalogId = items[0].restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+  if (catalogId) {
+    const check = await checkCatalogAccess(catalogId)
+    if (!check.accessible) {
+      console.error(`[Meta Catalog Sync Aborted] Catalog ID '${catalogId}' is not accessible: ${check.error}`)
+      return { total: items.length, synced: 0, failed: items.length }
+    }
+  }
 
   let synced = 0
   let failed = 0

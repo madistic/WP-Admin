@@ -443,39 +443,56 @@ export async function handleInitialGreeting(
 
   if (restaurant.whatsapp_phone_number_id) {
     if (catalogId) {
+      const { checkProductExistsInMeta, syncRestaurantCatalog } = await import("./catalog")
+
       let items = await getWhatsAppItems(restaurant.id)
-      let syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
 
-      // Auto-bootstrap: if no item is marked SYNCED yet, verify catalog access & attempt catalog sync for restaurant
-      if (!syncedItem) {
-        console.log(`[WhatsApp Router] No SYNCED catalog items found for '${restaurant.name}'. Verifying catalog access and triggering catalog sync...`)
-        const { syncRestaurantCatalog, checkCatalogAccess } = await import("./catalog")
-        const accessCheck = await checkCatalogAccess(catalogId)
+      // Find the first DB-SYNCED candidate and verify it ACTUALLY exists in Meta live
+      const dbSyncedItems = items.filter((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
 
-        if (accessCheck.accessible) {
-          await syncRestaurantCatalog(restaurant.id)
-          items = await getWhatsAppItems(restaurant.id)
-          syncedItem = items.find((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+      let verifiedRetailerId: string | null = null
+
+      for (const candidate of dbSyncedItems) {
+        const liveCheck = await checkProductExistsInMeta(catalogId, candidate.meta_product_sku!, candidate.name)
+        if (liveCheck.exists) {
+          verifiedRetailerId = candidate.meta_product_sku!
+          console.log(`[WhatsApp Router] Live Meta verification PASSED for '${candidate.name}' (retailer_id: ${verifiedRetailerId}, catalog: ${catalogId})`)
+          break
         } else {
-          console.warn(`[WhatsApp Router] Catalog ID '${catalogId}' is not accessible (${accessCheck.error}). Falling back to interactive buttons flow.`)
+          console.warn(`[WhatsApp Router] DB-SYNCED item '${candidate.name}' (retailer_id: ${candidate.meta_product_sku}) NOT FOUND in Meta. Skipping.`)
         }
       }
 
-      // ONLY send catalog_message if at least one item is confirmed SYNCED in Meta Catalog
-      if (syncedItem) {
-        const thumbnailRetailerId = syncedItem.meta_product_sku
-        console.log(`[WhatsApp Router] Sending catalog message for '${restaurant.name}' (Catalog ID: ${catalogId}, Thumbnail Retailer ID: ${thumbnailRetailerId})`)
+      // If no live-verified item found, attempt a full catalog sync and re-verify
+      if (!verifiedRetailerId) {
+        console.log(`[WhatsApp Router] No live-verified Meta product for '${restaurant.name}'. Triggering catalog sync...`)
+        await syncRestaurantCatalog(restaurant.id)
+        items = await getWhatsAppItems(restaurant.id)
 
+        const refreshedSyncedItems = items.filter((i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== "")
+        for (const candidate of refreshedSyncedItems) {
+          const liveCheck = await checkProductExistsInMeta(catalogId, candidate.meta_product_sku!, candidate.name)
+          if (liveCheck.exists) {
+            verifiedRetailerId = candidate.meta_product_sku!
+            console.log(`[WhatsApp Router] Post-sync live Meta verification PASSED for '${candidate.name}' (retailer_id: ${verifiedRetailerId})`)
+            break
+          }
+        }
+      }
+
+      // ONLY send catalog_message if a product is LIVE-VERIFIED in Meta — never trust DB status alone
+      if (verifiedRetailerId) {
+        console.log(`[WhatsApp Router] Sending catalog_message for '${restaurant.name}' (catalog: ${catalogId}, thumbnail retailer_id: ${verifiedRetailerId})`)
         await sendWhatsAppCatalogMessage(
           restaurant.whatsapp_phone_number_id,
           sender,
           `👋 Welcome to *${restaurant.name}*!\nTap below to browse our full menu and place your order natively:`,
           catalogId,
-          thumbnailRetailerId
+          verifiedRetailerId
         )
         return { handled: true, responseText, intent: "initial_greeting" }
       } else {
-        console.warn(`[WhatsApp Router] Zero SYNCED items available for '${restaurant.name}'. Falling back to interactive buttons flow to prevent Meta Error #131009.`)
+        console.warn(`[WhatsApp Router] No live-verified Meta products for '${restaurant.name}'. Falling back to interactive buttons flow to prevent Meta Error #131009.`)
       }
     }
 

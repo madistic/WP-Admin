@@ -100,7 +100,7 @@ async function scanCatalogForProduct(
  *
  * Logs [Meta Catalog Verification] lines but NEVER the token.
  */
-async function checkProductExistsInMeta(
+export async function checkProductExistsInMeta(
   catalogId: string,
   retailerId: string,
   itemName: string

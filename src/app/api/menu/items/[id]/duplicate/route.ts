@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
 
 export async function POST(
   request: Request,
@@ -29,6 +30,8 @@ export async function POST(
 
     const count = await prisma.menuItem.count({ where: { restaurant_id: restaurantId } })
 
+    // NOTE: meta_product_sku is intentionally NOT copied — the duplicate gets its
+    // own new stable retailer_id (item.id) when syncMenuItemToMetaCatalog runs.
     const duplicated = await prisma.menuItem.create({
       data: {
         restaurant_id: restaurantId,
@@ -67,9 +70,24 @@ export async function POST(
       },
     })
 
-    return NextResponse.json(duplicated, { status: 201 })
+    // Sync the new duplicate as a separate Meta Catalogue product with its own retailer_id
+    const syncResult = await syncMenuItemToMetaCatalog(duplicated.id)
+    if (syncResult.success) {
+      console.log(`[Meta Catalog Sync] Duplicate CREATE succeeded for '${duplicated.name}' (id: ${duplicated.id})`)
+    } else {
+      console.warn(`[Meta Catalog Sync] Duplicate CREATE failed for '${duplicated.name}' (id: ${duplicated.id}): ${syncResult.error}`)
+    }
+
+    // Re-fetch to include updated meta_sync_status in response
+    const duplicatedWithSyncStatus = await prisma.menuItem.findUnique({
+      where: { id: duplicated.id },
+      include: { category: true, variants: true, addons: true },
+    })
+
+    return NextResponse.json(duplicatedWithSyncStatus, { status: 201 })
   } catch (error: any) {
     console.error("Duplicate Item Error:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
 }
+

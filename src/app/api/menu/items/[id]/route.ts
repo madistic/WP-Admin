@@ -2,7 +2,10 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
+import {
+  syncMenuItemToMetaCatalog,
+  deleteProductFromMetaCatalog,
+} from "@/lib/whatsapp/catalog"
 
 export async function PUT(
   request: Request,
@@ -46,12 +49,21 @@ export async function PUT(
       },
     })
 
-    // Trigger Meta Catalog sync
-    syncMenuItemToMetaCatalog(updated.id).catch((err) =>
-      console.error("[Menu API] Catalog sync error on update:", err)
-    )
+    // Sync updated product to Meta Catalog (uses stable retailer_id, verifies after sync)
+    const syncResult = await syncMenuItemToMetaCatalog(updated.id)
+    if (syncResult.success) {
+      console.log(`[Meta Catalog Sync] UPDATE succeeded for '${updated.name}' (id: ${updated.id})`)
+    } else {
+      console.warn(`[Meta Catalog Sync] UPDATE failed for '${updated.name}' (id: ${updated.id}): ${syncResult.error}`)
+    }
 
-    return NextResponse.json(updated)
+    // Re-fetch to return current meta_sync_status to the UI
+    const updatedWithSyncStatus = await prisma.menuItem.findUnique({
+      where: { id: updated.id },
+      include: { category: true, variants: true, addons: true },
+    })
+
+    return NextResponse.json(updatedWithSyncStatus)
   } catch (error: any) {
     console.error("Update Menu Item Error:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
@@ -71,15 +83,50 @@ export async function DELETE(
 
     const existing = await prisma.menuItem.findFirst({
       where: { id: itemId, restaurant_id: restaurantId },
+      include: { restaurant: true },
     })
 
     if (!existing) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
 
-    // Sync out of stock/disabled status to Meta Catalog before DB delete
-    await syncMenuItemToMetaCatalog(existing.id).catch((err) =>
-      console.error("[Menu API] Catalog sync error on delete:", err)
-    )
+    // Resolve catalog ID for this restaurant
+    const catalogId =
+      existing.restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
 
+    // Stable retailer_id that was used when the product was synced to Meta
+    const retailerId = existing.meta_product_sku
+
+    if (retailerId && catalogId) {
+      // Step 1: Delete from Meta Catalogue FIRST
+      const metaDeleteResult = await deleteProductFromMetaCatalog(
+        catalogId,
+        retailerId,
+        existing.name
+      )
+
+      if (!metaDeleteResult.success) {
+        // Do NOT delete the DB record — preserve it so the admin can retry
+        console.error(
+          `[Meta Catalog Delete] Failed to delete '${existing.name}' (retailer_id: ${retailerId}) from Meta. DB record preserved for retry. Error: ${metaDeleteResult.error}`
+        )
+        return NextResponse.json(
+          {
+            error: `Failed to remove product from Meta Catalogue: ${metaDeleteResult.error}. The menu item has been preserved — please retry deletion.`,
+          },
+          { status: 502 }
+        )
+      }
+
+      console.log(
+        `[Meta Catalog Delete] Product '${existing.name}' (retailer_id: ${retailerId}) removed from Meta. Proceeding to delete DB record.`
+      )
+    } else {
+      // No Meta product was ever synced — skip Meta deletion entirely
+      console.log(
+        `[Meta Catalog Delete] '${existing.name}' has no meta_product_sku — skipping Meta deletion, proceeding to delete DB record.`
+      )
+    }
+
+    // Step 2: Only delete DB record after Meta deletion confirmed (or item was never synced)
     await prisma.menuItem.delete({
       where: { id: itemId },
     })

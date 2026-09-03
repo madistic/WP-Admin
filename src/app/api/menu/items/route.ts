@@ -78,12 +78,21 @@ export async function POST(request: Request) {
       },
     })
 
-    // Trigger async Meta Commerce Catalog synchronization
-    syncMenuItemToMetaCatalog(item.id).catch((err) =>
-      console.error("[Menu API] Catalog sync error on create:", err)
-    )
+    // Sync to Meta Commerce Catalog synchronously so retailer_id + status are persisted before response
+    const syncResult = await syncMenuItemToMetaCatalog(item.id)
+    if (syncResult.success) {
+      console.log(`[Meta Catalog Sync] CREATE succeeded for '${item.name}' (id: ${item.id})`)
+    } else {
+      console.warn(`[Meta Catalog Sync] CREATE failed for '${item.name}' (id: ${item.id}): ${syncResult.error}`)
+    }
 
-    return NextResponse.json(item, { status: 201 })
+    // Re-fetch to include updated meta_sync_status in the response
+    const itemWithSyncStatus = await prisma.menuItem.findUnique({
+      where: { id: item.id },
+      include: { category: true, variants: true, addons: true },
+    })
+
+    return NextResponse.json(itemWithSyncStatus, { status: 201 })
   } catch (error: any) {
     console.error("Create Menu Item Error:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })

@@ -132,6 +132,57 @@ export async function checkProductExistsInMeta(
   }
 }
 
+/**
+ * Verifies a product exists in Meta Catalogue with retry + exponential back-off.
+ *
+ * Meta's catalog batch endpoint is asynchronous — a newly CREATEd product may
+ * not appear in GET /{catalog_id}/products immediately after the batch POST
+ * returns HTTP 200. This helper polls up to `maxAttempts` times, waiting
+ * `initialDelayMs * 2^attempt` between each attempt.
+ *
+ * For UPDATE operations (product already existed) the first attempt will
+ * typically succeed instantly; retries exist only as a safety net.
+ *
+ * Never logs the access token.
+ */
+async function verifyWithRetry(
+  catalogId: string,
+  retailerId: string,
+  itemName: string,
+  operation: "CREATE" | "UPDATE",
+  maxAttempts = 4,
+  initialDelayMs = 2000
+): Promise<{ exists: boolean; metaProductId?: string; error?: string }> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // For CREATE: always wait before first check — product is async in Meta.
+    // For UPDATE: attempt immediately first, then wait on retries.
+    if (operation === "CREATE" || attempt > 1) {
+      const delayMs = initialDelayMs * Math.pow(2, attempt - 1)
+      console.log(
+        `[Meta Catalog Verification] Waiting ${delayMs}ms before attempt ${attempt}/${maxAttempts} for '${itemName}' (retailer_id: ${retailerId})...`
+      )
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+
+    const result = await checkProductExistsInMeta(catalogId, retailerId, itemName)
+    if (result.exists) {
+      console.log(
+        `[Meta Catalog Verification] Confirmed on attempt ${attempt}/${maxAttempts}: '${itemName}' (retailer_id: ${retailerId}) exists in catalog ${catalogId}`
+      )
+      return result
+    }
+
+    console.warn(
+      `[Meta Catalog Verification] Attempt ${attempt}/${maxAttempts} — NOT FOUND '${itemName}' (retailer_id: ${retailerId}) in catalog ${catalogId}`
+    )
+  }
+
+  return {
+    exists: false,
+    error: `Product '${retailerId}' not found in Meta after ${maxAttempts} verification attempts (${operation})`,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // EXPORTED HELPERS
 // ---------------------------------------------------------------------------
@@ -526,21 +577,22 @@ export async function syncMenuItemToMetaCatalog(
     }
 
     // -----------------------------------------------------------------------
-    // Step 4: Verify product actually exists in Meta Catalogue.
-    // Paginated scan — no unreliable filter syntax.
+    // Step 4: Verify product exists in Meta — with retry+back-off for CREATE.
+    // Meta catalog product availability after a batch POST is asynchronous.
+    // We poll up to 4 times (2s → 4s → 8s → 16s) before declaring failure.
     // -----------------------------------------------------------------------
     console.log(
-      `[Meta Catalog Verification] Verifying '${item.name}' (retailer_id: ${retailerId}) in catalog ${catalogId} after ${batchMethod}...`
+      `[Meta Catalog Verification] Starting verification for '${item.name}' (retailer_id: ${retailerId}) after ${batchMethod}...`
     )
 
-    const verification = await checkProductExistsInMeta(catalogId, retailerId, item.name)
+    const verification = await verifyWithRetry(catalogId, retailerId, item.name, batchMethod)
 
     if (!verification.exists) {
       const errMsg =
         verification.error ||
         `Product '${retailerId}' not found in Meta Catalogue after ${batchMethod}`
       console.error(
-        `[Meta Catalog Sync Failed] '${item.name}' (retailer_id: ${retailerId}, catalog: ${catalogId}) verification failed: ${errMsg}`
+        `[Meta Catalog Sync Failed] '${item.name}' (retailer_id: ${retailerId}, catalog: ${catalogId}) all verification attempts exhausted: ${errMsg}`
       )
       await prisma.menuItem.update({
         where: { id: menuItemId },

@@ -33,6 +33,13 @@ export async function GET(request: Request) {
 }
 
 /**
+ * In-memory store to deduplicate incoming webhook messages.
+ * Meta Webhooks will retry if our processing (like catalog sync) takes longer than 20 seconds.
+ * This ensures a single message ID is only processed once.
+ */
+const processedMessageIds = new Set<string>()
+
+/**
  * POST /api/webhooks/whatsapp
  * Meta WhatsApp Cloud API Event Notification Listener Endpoint
  */
@@ -82,6 +89,19 @@ export async function POST(request: Request) {
 
         for (const message of messages) {
           const messageId = message?.id
+          
+          if (messageId) {
+            if (processedMessageIds.has(messageId)) {
+              console.log(`[WhatsApp Webhook] Duplicate message ID detected: ${messageId}. Skipping to prevent multiple responses.`);
+              continue;
+            }
+            processedMessageIds.add(messageId);
+            // Keep the set from growing infinitely in memory
+            if (processedMessageIds.size > 2000) {
+              processedMessageIds.clear();
+            }
+          }
+
           const from = message?.from
           const messageType = message?.type
           const timestamp = message?.timestamp

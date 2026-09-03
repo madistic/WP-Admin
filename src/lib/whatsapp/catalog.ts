@@ -489,15 +489,30 @@ export async function syncMenuItemToMetaCatalog(
     }
 
     // Add Meta Locality Fields required for product validation
-    if (item.restaurant.pincode) {
-      productPayload.availability_postal_codes = [item.restaurant.pincode]
-    } else {
-      productPayload.availability_circle_radius = item.restaurant.delivery_radius > 0 ? item.restaurant.delivery_radius : 5
+    // Do NOT fake or randomly generate data. Use existing DB values.
+    const deliveryRadius = item.restaurant.delivery_radius > 0 ? item.restaurant.delivery_radius : 5
+    const lat = (item.restaurant as any).latitude
+    const lng = (item.restaurant as any).longitude
+
+    if (lat && lng) {
+      // 1. Prefer availability_circle_origin + radius
+      productPayload.availability_circle_origin = {
+        latitude: parseFloat(lat),
+        longitude: parseFloat(lng)
+      }
+      productPayload.availability_circle_radius = deliveryRadius
+      productPayload.availability_circle_radius_unit = "KM"
+    } else if (item.restaurant.pincode && item.restaurant.pincode.trim() !== "") {
+      // 2. Fallback to postal codes
+      productPayload.availability_postal_codes = [item.restaurant.pincode.trim()]
+    } else if (item.restaurant.address && item.restaurant.city) {
+      // 3. Fallback to radius + address
+      productPayload.availability_circle_radius = deliveryRadius
       productPayload.availability_circle_radius_unit = "KM"
       productPayload.address = {
-        street1: item.restaurant.address || "Main Street",
-        city: item.restaurant.city || "Mumbai",
-        region: item.restaurant.state || "MH",
+        street1: item.restaurant.address,
+        city: item.restaurant.city,
+        region: item.restaurant.state || item.restaurant.city,
         country: "IN",
       }
     }

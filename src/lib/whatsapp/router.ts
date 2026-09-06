@@ -290,7 +290,7 @@ export async function processIncomingWhatsAppMessage(
     return await handleTrackOrderPrompt(restaurant, sender)
   }
 
-  if (interactiveId === "action_view_menu" || interactiveId === "action_categories" || cleanText === "view menu" || cleanText === "menu") {
+  if (interactiveId === "action_view_menu" || interactiveId === "action_categories" || cleanText === "view items" || cleanText === "menu") {
     return await handleOpenCatalog(restaurant, sender)
   }
 
@@ -298,8 +298,8 @@ export async function processIncomingWhatsAppMessage(
     return await handleViewCart(restaurant, sender)
   }
 
-  if (interactiveId === "action_edit_cart" || cleanText === "edit cart") {
-    return await handleOpenCatalog(restaurant, sender)
+  if (interactiveId === "action_edit_cart" || cleanText === "edit cart" || cleanText === "update cart") {
+    return await handleOpenCatalogCart(restaurant, sender)
   }
 
   if (interactiveId === "loc_prompt_address") {
@@ -515,7 +515,7 @@ export async function handleInitialGreeting(
     sender,
     responseText,
     [
-      { id: "action_view_menu", title: "🍽️ View Menu" },
+      { id: "action_view_menu", title: "🍽️ View Items" },
       { id: "action_track_order_prompt", title: "📦 Track Order" },
     ]
   )
@@ -574,15 +574,6 @@ export async function handleOpenCatalog(
     }
 
     if (verifiedRetailerId) {
-      if (restaurant.logo_url) {
-        const { sendWhatsAppImageMessage } = await import("./client")
-        await sendWhatsAppImageMessage(
-          restaurant.whatsapp_phone_number_id,
-          sender,
-          restaurant.logo_url
-        )
-      }
-
       const { getMenuCategories } = await import("./menu")
       const categories = await getMenuCategories(restaurant.id)
       
@@ -630,6 +621,26 @@ export async function handleOpenCatalog(
   return await handleInitialGreeting(restaurant, sender)
 }
 
+export async function handleOpenCatalogCart(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+  const catalogId = restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+  const responseText = "You can update your cart items below:"
+
+  if (restaurant.whatsapp_phone_number_id && catalogId) {
+    const { sendWhatsAppCatalogMessage } = await import("./client")
+    await sendWhatsAppCatalogMessage(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      catalogId
+    )
+    return { handled: true, responseText, intent: "open_catalog_cart" }
+  }
+  return await handleInitialGreeting(restaurant, sender)
+}
 
 /**
  * STEP 9: TRACK ORDER PROMPT & QUERY
@@ -893,7 +904,7 @@ export async function handleNativeOrderMessage(
       sender,
       responseText,
       [
-        { id: "action_view_menu", title: "🛒 Update Cart" },
+        { id: "action_edit_cart", title: "🛒 View Cart / Update" },
         { id: "action_checkout", title: "✅ Checkout" },
       ]
     )

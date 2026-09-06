@@ -59,6 +59,16 @@ export interface WhatsAppInteractiveListPayload {
   }
 }
 
+export interface WhatsAppImageMessagePayload {
+  messaging_product: "whatsapp"
+  recipient_type: "individual"
+  to: string
+  type: "image"
+  image: {
+    link: string
+  }
+}
+
 /**
  * Sends an outbound message via Meta WhatsApp Cloud API.
  * Uses process.env.WHATSAPP_ACCESS_TOKEN.
@@ -66,7 +76,7 @@ export interface WhatsAppInteractiveListPayload {
  */
 export async function sendWhatsAppCloudMessage(
   phoneNumberId: string,
-  payload: WhatsAppTextMessagePayload | WhatsAppInteractiveListPayload | WhatsAppInteractiveButtonsPayload
+  payload: WhatsAppTextMessagePayload | WhatsAppInteractiveListPayload | WhatsAppInteractiveButtonsPayload | WhatsAppImageMessagePayload
 ): Promise<{ success: boolean; response?: any; mock?: boolean }> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN
 

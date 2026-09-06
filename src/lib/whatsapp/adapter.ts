@@ -16,6 +16,7 @@ export interface WhatsAppItemFormat {
   price_display: string
   price: number
   category_name: string
+  category_id: string
   is_veg: boolean
   is_today_special: boolean
   is_bestseller: boolean
@@ -51,6 +52,7 @@ export function formatItemsForWhatsApp(items: Array<any>): WhatsAppItemFormat[] 
     price_display: `₹${item.price.toFixed(2)}`,
     price: item.price,
     category_name: item.category?.name || "",
+    category_id: item.category?.id || "",
     is_veg: item.is_veg,
     is_today_special: item.is_today_special,
     is_bestseller: item.is_bestseller,

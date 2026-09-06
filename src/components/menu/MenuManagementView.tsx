@@ -435,6 +435,23 @@ export default function MenuManagementView() {
             <span className="absolute left-3 top-2.5 text-gray-400 text-sm">🔍</span>
           </div>
 
+          {/* Category Searchable Dropdown */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-600 whitespace-nowrap">Category:</label>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 min-w-[180px]"
+            >
+              <option value="ALL">All Categories ({items.length})</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name}{!cat.is_active ? " (Inactive)" : ""} ({cat._count?.items || 0})
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Filter Tabs */}
           <div className="flex flex-wrap gap-1 bg-gray-100 p-1 rounded-lg text-xs font-medium">
             {[

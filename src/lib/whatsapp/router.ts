@@ -60,6 +60,7 @@ export interface ResolvedRestaurantInfo {
   name: string
   whatsapp_phone_number_id?: string | null
   whatsapp_catalog_id?: string | null
+  is_open?: boolean
 }
 
 /**
@@ -76,8 +77,26 @@ export async function processIncomingWhatsAppMessage(
   if (message.type === "order" && message.orderPayload) {
     return await handleNativeOrderMessage(restaurant, sender, message.orderPayload)
   }
+
+  // ── RESTAURANT CLOSED CHECK ──────────────────────────────────────────────
+  // Only block the initial greeting / new conversations when closed.
+  // Existing checkout flows (address, confirmation) are allowed to complete.
+  const cleanText = (message.textBody || "").trim().toLowerCase()
   const interactiveId = message.interactiveId || ""
-  const cleanText = rawText.toLowerCase()
+  const isGreeting =
+    cleanText === "hi" || cleanText === "hello" || cleanText === "hey" ||
+    cleanText === "start" || interactiveId === "action_initial_greeting"
+
+  if (isGreeting && restaurant.is_open === false) {
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppTextMessage(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        `🔴 *We're currently closed.*\nPlease try again when we're open. 🍽️`
+      )
+    }
+    return { handled: true, responseText: "closed", intent: "restaurant_closed" }
+  }
 
   // Fetch current cart state to check active steps
   const cart = await getCartDetails(restaurant.id, sender)

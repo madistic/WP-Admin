@@ -3,6 +3,8 @@ import { authOptions } from "@/lib/auth"
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import SidebarNav from "@/components/SidebarNav"
+import SignOutButton from "@/components/SignOutButton"
+import StoreStatusToggle from "@/components/StoreStatusToggle"
 import prisma from "@/lib/prisma"
 
 export default async function DashboardLayout({
@@ -68,17 +70,20 @@ export default async function DashboardLayout({
               </h1>
             </div>
 
-            {/* Restaurant Store Acceptance Status Indicator */}
-            {restaurant && (
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs">
+          {/* Restaurant Store Status Indicator + Quick Toggle */}
+          {restaurant && (
+            <div className="hidden sm:flex items-center gap-2">
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs">
                 <span className={`w-2 h-2 rounded-full ${restaurant.is_open ? "bg-emerald-500 animate-pulse" : "bg-rose-500"}`} />
                 <span className="font-medium text-slate-700">{restaurant.name}</span>
                 <span className="text-slate-400">•</span>
                 <span className={`font-semibold ${restaurant.is_open ? "text-emerald-700" : "text-rose-600"}`}>
-                  {restaurant.is_open ? "Accepting Orders" : "Closed"}
+                  {restaurant.is_open ? "Open" : "Closed"}
                 </span>
               </div>
-            )}
+              <StoreStatusToggle isOpen={restaurant.is_open} />
+            </div>
+          )}
           </div>
 
           <div className="flex items-center gap-4">
@@ -89,14 +94,7 @@ export default async function DashboardLayout({
               ⚡ Order Simulator
             </Link>
 
-            <form action="/api/auth/signout" method="POST">
-              <button
-                type="submit"
-                className="text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors px-2.5 py-1.5 rounded-md hover:bg-slate-100"
-              >
-                Sign out
-              </button>
-            </form>
+            <SignOutButton />
           </div>
         </header>
 

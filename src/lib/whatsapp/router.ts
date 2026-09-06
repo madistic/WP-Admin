@@ -504,23 +504,25 @@ export async function handleInitialGreeting(
   sender: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
-  const responseText = `👋 Hey! Welcome to *${restaurant.name}* 🍽️\nWhat would you like to order today?`
+
+  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+  const customer = await prisma.customer.findUnique({
+    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhone } },
+    select: { name: true }
+  })
+
+  const greetingName = customer?.name || "there"
+  const responseText = `Hello ${greetingName} 👋\nWelcome to ${restaurant.name}! What would you like to order today?`
 
   if (!restaurant.whatsapp_phone_number_id) {
     return { handled: true, responseText, intent: "initial_greeting" }
   }
 
-  await sendWhatsAppInteractiveButtons(
-    restaurant.whatsapp_phone_number_id,
-    sender,
-    responseText,
-    [
-      { id: "action_view_menu", title: "🍽️ View Items" },
-      { id: "action_track_order_prompt", title: "📦 Track Order" },
-    ]
-  )
+  const { sendWhatsAppTextMessage } = await import("./client")
+  await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
 
-  return { handled: true, responseText, intent: "initial_greeting" }
+  // Immediately flow into the native catalog
+  return await handleOpenCatalog(restaurant, sender)
 }
 
 export async function handleOpenCatalog(
@@ -601,13 +603,21 @@ export async function handleOpenCatalog(
         }
       }
       
-      const { sendWhatsAppMultiProductList } = await import("./client")
+      const { sendWhatsAppMultiProductList, sendWhatsAppInteractiveButtons } = await import("./client")
       await sendWhatsAppMultiProductList(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
         catalogId,
         sections
+      )
+
+      // Always show Track Order alongside the menu
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        "Need to check an existing order?",
+        [{ id: "action_track_order_prompt", title: "📦 Track Order" }]
       )
 
       return { handled: true, responseText, intent: "open_catalog" }

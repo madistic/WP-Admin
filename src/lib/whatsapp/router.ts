@@ -145,6 +145,11 @@ export async function processIncomingWhatsAppMessage(
       return { handled: true, responseText, intent: "awaiting_name_change" }
     }
 
+    if (interactiveId === "co_empty_cart") {
+      await clearCart(restaurant.id, sender)
+      await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+      return await handleInitialGreeting(restaurant, sender)
+    }
     if (cart.checkout_step === "AWAITING_NAME_CHANGE") {
       if (rawText.length > 0) {
         const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
@@ -290,16 +295,8 @@ export async function processIncomingWhatsAppMessage(
     return await handleTrackOrderPrompt(restaurant, sender)
   }
 
-  if (interactiveId === "action_view_menu" || interactiveId === "action_categories" || cleanText === "view items" || cleanText === "menu") {
+  if (interactiveId === "action_view_menu" || interactiveId === "action_categories") {
     return await handleOpenCatalog(restaurant, sender)
-  }
-
-  if (interactiveId === "action_view_cart" || cleanText === "view cart" || cleanText === "cart") {
-    return await handleViewCart(restaurant, sender)
-  }
-
-  if (interactiveId === "action_edit_cart" || cleanText === "edit cart" || cleanText === "update cart") {
-    return await handleOpenCatalogCart(restaurant, sender)
   }
 
   if (interactiveId === "loc_prompt_address") {
@@ -892,30 +889,28 @@ export async function handleNativeOrderMessage(
     await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity })
   }
 
-  // Set cart step back to IDLE to pause the flow and wait for an action
+  // Set cart step so next action goes into name flow
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
 
   const cart = await getCartDetails(restaurant.id, sender)
-  
-  const textLines = [`🛒 *Order Received from Catalog!*`]
-  if (cart) {
-    cart.items.forEach(i => {
-      textLines.push(`• ${i.name} × ${i.quantity}`)
-    })
-  }
-  const responseText = textLines.join("\n")
+  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+  const existingCustomer = await prisma.customer.findUnique({
+    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhone } },
+    select: { name: true }
+  })
+
+  const greetingName = existingCustomer?.name || "there"
+  const responseText = `Hello *${greetingName}* 👋\nReady to checkout?`
 
   if (restaurant.whatsapp_phone_number_id) {
-    // Send confirmation text
-    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
-    
     await sendWhatsAppInteractiveButtons(
       restaurant.whatsapp_phone_number_id,
       sender,
       responseText,
       [
-        { id: "action_edit_cart", title: "🛒 View Cart / Update" },
-        { id: "action_checkout", title: "✅ Checkout" },
+        { id: "action_checkout", title: existingCustomer?.name ? "✅ Continue" : "👤 Enter Name" },
+        { id: "co_change_name", title: "✏️ Change Name" },
+        { id: "co_cancel", title: "❌ Cancel Order" },
       ]
     )
   }
@@ -1413,20 +1408,30 @@ async function promptForAddressSelection(
     rows.push({ id: "loc_share_current", title: "📍 Share New Location", description: "Send a WhatsApp location pin" })
     rows.push({ id: "loc_enter_manual", title: "✍️ Enter Manually", description: "Type your new address" })
 
-    const responseText = `Hi *${customerName}*! Where should we deliver?`
+    const responseText = `📍 *Select your delivery address, ${customerName}*`
     if (restaurant.whatsapp_phone_number_id) {
+      const listRows = addresses.slice(0, 7).map((addr) => ({
+        id: `addr_select_${addr.id}`,
+        title: `🏠 ${addr.label || 'Saved Address'}`,
+        description: addr.address_line.slice(0, 72)
+      }))
+      listRows.push({ id: "loc_share_current", title: "📍 Share New Location", description: "Send a WhatsApp location pin" })
+      listRows.push({ id: "loc_enter_manual", title: "✍️ Enter Manually", description: "Type your new address" })
+      listRows.push({ id: "co_empty_cart", title: "🗑️ Empty Cart", description: "Clear cart & start over" })
+      listRows.push({ id: "co_cancel", title: "❌ Cancel Order", description: "Cancel and clear cart" })
+
       await sendWhatsAppInteractiveList(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        "Select Delivery Address",
-        [{ title: "Addresses", rows }]
+        "Select Address",
+        [{ title: "Options", rows: listRows }]
       )
     }
     return { handled: true, responseText, intent: "awaiting_location_choice_list" }
   }
 
-  const responseText = `Hi *${customerName}*! Where should we deliver your order?`
+  const responseText = `📍 *Where should we deliver, ${customerName}?*`
   if (restaurant.whatsapp_phone_number_id) {
     await sendWhatsAppInteractiveButtons(
       restaurant.whatsapp_phone_number_id,
@@ -1435,7 +1440,7 @@ async function promptForAddressSelection(
       [
         { id: "loc_share_current", title: "📍 Share Location" },
         { id: "loc_enter_manual", title: "✍️ Enter Manually" },
-        { id: "co_cancel", title: "❌ Cancel" },
+        { id: "co_cancel", title: "❌ Cancel Order" },
       ]
     )
   }
@@ -1529,10 +1534,8 @@ export async function renderOrderConfirmation(
       responseText,
       [
         { id: "co_confirm", title: "✅ Confirm Order" },
-        { id: "action_edit_cart", title: "✏️ Edit Cart" },
-        { id: "co_change_address", title: "📍 Change Address" },
-      ],
-      { headerImageUrl: restaurant.logo_url || undefined }
+        { id: "co_cancel", title: "❌ Cancel Order" },
+      ]
     )
   }
 

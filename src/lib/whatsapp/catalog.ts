@@ -751,3 +751,129 @@ export async function syncRestaurantCatalog(
 
   return { total: items.length, synced, failed }
 }
+
+// ---------------------------------------------------------------------------
+// VARIANT SYNC
+// ---------------------------------------------------------------------------
+
+/**
+ * Syncs a single MenuItemVariant to Meta Catalog as a separate product.
+ *
+ * retailer_id pattern: "{itemId}__var__{variantId}"
+ * This lets handleNativeOrderMessage reconstruct which variant was selected
+ * when the customer sends a catalog cart.
+ *
+ * The variant product is named "{Item Name} [{Variant Name}]" so it is clearly
+ * identifiable in the WhatsApp Catalog UI.
+ */
+export async function syncMenuItemVariantToMetaCatalog(
+  variantId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const variant = await prisma.menuItemVariant.findUnique({
+      where: { id: variantId },
+      include: {
+        menuItem: {
+          include: { restaurant: true, category: true },
+        },
+      },
+    })
+
+    if (!variant) return { success: false, error: "Variant not found" }
+
+    const item = variant.menuItem
+    const catalogId = item.restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+    const token = process.env.WHATSAPP_ACCESS_TOKEN
+
+    if (!catalogId || !token) {
+      return { success: false, error: "Missing catalog ID or access token" }
+    }
+
+    // Stable retailer_id for this variant — never changes
+    const retailerIdBase = item.meta_product_sku || item.id
+    const retailerId = `${retailerIdBase}__var__${variant.id}`
+
+    const publicImageUrl =
+      item.image_url && item.image_url.startsWith("http")
+        ? item.image_url
+        : "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop"
+
+    const isAvailable = item.is_available && item.is_active && variant.is_available
+
+    const existenceCheck = await checkProductExistsInMeta(catalogId, retailerId, `${item.name} [${variant.name}]`)
+    const batchMethod: "CREATE" | "UPDATE" = existenceCheck.exists ? "UPDATE" : "CREATE"
+
+    const productPayload = {
+      name: `${item.name} [${variant.name}]`,
+      description: item.description || `${item.name} - ${variant.name}`,
+      availability: isAvailable ? "in stock" : "out of stock",
+      condition: "new",
+      price: Math.round(variant.price * 100),
+      currency: "INR",
+      url: `https://wa.me/${item.restaurant.whatsapp_phone_number_id || ""}`,
+      brand: item.restaurant.name,
+      image_url: publicImageUrl,
+      category: item.category?.name || "Food & Beverages",
+      item_group_id: retailerIdBase,
+    }
+
+    const batchUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/batch`
+    const batchRes = await fetch(batchUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: [{ method: batchMethod, retailer_id: retailerId, data: productPayload }],
+      }),
+    })
+
+    const batchData = await batchRes.json()
+
+    if (!batchRes.ok) {
+      return { success: false, error: batchData?.error?.message || `HTTP ${batchRes.status}` }
+    }
+
+    const validationStatus: any[] = batchData?.validation_status ?? []
+    for (const vs of validationStatus) {
+      if (vs?.errors && vs.errors.length > 0) {
+        const errMsg = vs.errors.map((e: any) => e?.summary || e?.message || JSON.stringify(e)).join("; ")
+        return { success: false, error: errMsg }
+      }
+    }
+
+    console.log(`[Meta Catalog Variant Sync] ${batchMethod} '${item.name} [${variant.name}]' (retailer_id: ${retailerId})`)
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err?.message || "Exception during variant sync" }
+  }
+}
+
+/**
+ * Syncs the base item + all its variants to Meta Catalog.
+ * Call this after create/update of a menu item.
+ */
+export async function syncMenuItemWithVariants(
+  menuItemId: string
+): Promise<{ success: boolean; variantResults: Array<{ variantId: string; success: boolean; error?: string }> }> {
+  // Sync the base item first
+  const baseResult = await syncMenuItemToMetaCatalog(menuItemId)
+
+  // Fetch variants
+  const variants = await prisma.menuItemVariant.findMany({
+    where: { menu_item_id: menuItemId },
+  })
+
+  const variantResults: Array<{ variantId: string; success: boolean; error?: string }> = []
+
+  for (const variant of variants) {
+    const vResult = await syncMenuItemVariantToMetaCatalog(variant.id)
+    variantResults.push({ variantId: variant.id, success: vResult.success, error: vResult.error })
+    if (!vResult.success) {
+      console.warn(`[Meta Catalog Variant Sync] Failed for variant '${variant.name}' (id: ${variant.id}): ${vResult.error}`)
+    }
+  }
+
+  return { success: baseResult.success, variantResults }
+}

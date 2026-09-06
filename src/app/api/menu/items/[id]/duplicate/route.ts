@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
+import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
 
 export async function POST(
   request: Request,
@@ -71,11 +71,11 @@ export async function POST(
     })
 
     // Sync the new duplicate as a separate Meta Catalogue product with its own retailer_id
-    const syncResult = await syncMenuItemToMetaCatalog(duplicated.id)
+    const syncResult = await syncMenuItemWithVariants(duplicated.id)
     if (syncResult.success) {
       console.log(`[Meta Catalog Sync] Duplicate CREATE succeeded for '${duplicated.name}' (id: ${duplicated.id})`)
     } else {
-      console.warn(`[Meta Catalog Sync] Duplicate CREATE failed for '${duplicated.name}' (id: ${duplicated.id}): ${syncResult.error}`)
+      console.warn(`[Meta Catalog Sync] Duplicate CREATE failed for '${duplicated.name}' (id: ${duplicated.id})`)
     }
 
     // Re-fetch to include updated meta_sync_status in response

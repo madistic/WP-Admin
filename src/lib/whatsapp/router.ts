@@ -124,7 +124,8 @@ export async function processIncomingWhatsAppMessage(
       cart.checkout_step === "AWAITING_MANUAL_ADDRESS" ||
       cart.checkout_step === "AWAITING_BUILDING_NO" ||
       cart.checkout_step === "AWAITING_CONFIRMATION" ||
-      cart.checkout_step === "AWAITING_ADDRESS_SAVE_DECISION")
+      cart.checkout_step === "AWAITING_ADDRESS_SAVE_DECISION" ||
+      cart.checkout_step === "AWAITING_ORDER_NOTE")
   ) {
     if (interactiveId === "co_cancel" || cleanText === "cancel") {
       await clearCart(restaurant.id, sender)
@@ -160,6 +161,16 @@ export async function processIncomingWhatsAppMessage(
 
         // Continue to address selection
         return await promptForAddressSelection(restaurant, sender, cleanPhone, rawText)
+      }
+    }
+
+    if (cart.checkout_step === "AWAITING_ORDER_NOTE") {
+      if (rawText.length > 0 && cart.items.length > 0) {
+        await updateCartItemInstruction(restaurant.id, sender, cart.items[0].id, `Order Note: ${rawText}`)
+        // Transition back to IDLE temporarily so handleInitiateCheckout doesn't get confused, 
+        // handleInitiateCheckout sets it to the next appropriate step
+        await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+        return await handleInitiateCheckout(restaurant, sender)
       }
     }
 
@@ -414,6 +425,15 @@ export async function processIncomingWhatsAppMessage(
 
   if (interactiveId === "cart_checkout" || interactiveId === "action_checkout" || cleanText === "checkout") {
     return await handleInitiateCheckout(restaurant, sender)
+  }
+
+  if (interactiveId === "co_add_note") {
+    await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ORDER_NOTE")
+    const responseText = "📝 Please reply with your special instructions or note for the order:"
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+    }
+    return { handled: true, responseText, intent: "awaiting_order_note" }
   }
 
   if (interactiveId === "cart_clear" || cleanText === "clear" || cleanText === "clear cart") {
@@ -848,7 +868,7 @@ export async function handleNativeOrderMessage(
 
   // Pre-validate all items before mutating/clearing existing cart
   const items = await getWhatsAppItems(restaurant.id)
-  const validItemsToInsert: Array<{ menuItemId: string; quantity: number }> = []
+  const validItemsToInsert: Array<{ menuItemId: string; quantity: number; variantId?: string }> = []
 
   for (const itemPayload of orderPayload.productItems) {
     const sku = itemPayload.product_retailer_id
@@ -859,15 +879,24 @@ export async function handleNativeOrderMessage(
       continue
     }
 
+    let baseSku = sku
+    let variantId: string | undefined = undefined
+
+    if (sku.includes("__var__")) {
+      const parts = sku.split("__var__")
+      baseSku = parts[0]
+      variantId = parts[1]
+    }
+
     // Find matching item belonging to THIS restaurant by id or meta_product_sku
-    const matchedItem = items.find((i) => i.id === sku || i.meta_product_sku === sku)
+    const matchedItem = items.find((i) => i.id === baseSku || i.meta_product_sku === baseSku)
 
     if (!matchedItem) {
-      console.warn(`[Native Order Error] Retailer ID '${sku}' does not belong to restaurant '${restaurant.id}'`)
+      console.warn(`[Native Order Error] Retailer ID '${baseSku}' does not belong to restaurant '${restaurant.id}'`)
       continue
     }
 
-    validItemsToInsert.push({ menuItemId: matchedItem.id, quantity: qty })
+    validItemsToInsert.push({ menuItemId: matchedItem.id, quantity: qty, variantId })
   }
 
   if (validItemsToInsert.length === 0) {
@@ -882,7 +911,7 @@ export async function handleNativeOrderMessage(
   await clearCart(restaurant.id, sender)
 
   for (const validItem of validItemsToInsert) {
-    await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity })
+    await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity, variantId: validItem.variantId })
   }
 
   // Set cart step so next action goes into checkout
@@ -904,6 +933,7 @@ export async function handleNativeOrderMessage(
       responseText,
       [
         { id: "action_checkout", title: "✅ Continue" },
+        { id: "co_add_note", title: "📝 Add Note" },
         { id: "co_cancel", title: "❌ Cancel Order" },
       ]
     )

@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import {
-  syncMenuItemToMetaCatalog,
+  syncMenuItemWithVariants,
   deleteProductFromMetaCatalog,
 } from "@/lib/whatsapp/catalog"
 
@@ -50,11 +50,11 @@ export async function PUT(
     })
 
     // Sync updated product to Meta Catalog (uses stable retailer_id, verifies after sync)
-    const syncResult = await syncMenuItemToMetaCatalog(updated.id)
+    const syncResult = await syncMenuItemWithVariants(updated.id)
     if (syncResult.success) {
       console.log(`[Meta Catalog Sync] UPDATE succeeded for '${updated.name}' (id: ${updated.id})`)
     } else {
-      console.warn(`[Meta Catalog Sync] UPDATE failed for '${updated.name}' (id: ${updated.id}): ${syncResult.error}`)
+      console.warn(`[Meta Catalog Sync] UPDATE failed for '${updated.name}' (id: ${updated.id})`)
     }
 
     // Re-fetch to return current meta_sync_status to the UI

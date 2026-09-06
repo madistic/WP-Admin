@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
+import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
 
 export async function POST(request: Request) {
   try {
@@ -79,11 +79,11 @@ export async function POST(request: Request) {
     })
 
     // Sync to Meta Commerce Catalog synchronously so retailer_id + status are persisted before response
-    const syncResult = await syncMenuItemToMetaCatalog(item.id)
+    const syncResult = await syncMenuItemWithVariants(item.id)
     if (syncResult.success) {
       console.log(`[Meta Catalog Sync] CREATE succeeded for '${item.name}' (id: ${item.id})`)
     } else {
-      console.warn(`[Meta Catalog Sync] CREATE failed for '${item.name}' (id: ${item.id}): ${syncResult.error}`)
+      console.warn(`[Meta Catalog Sync] CREATE failed for '${item.name}' (id: ${item.id})`)
     }
 
     // Re-fetch to include updated meta_sync_status in the response

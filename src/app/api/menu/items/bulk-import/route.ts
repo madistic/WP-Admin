@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
+import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
 import ExcelJS from "exceljs"
 
 export async function POST(request: Request) {
@@ -107,9 +107,9 @@ export async function POST(request: Request) {
         })
         
         // Sync to meta catalog
-        const syncResult = await syncMenuItemToMetaCatalog(item.id)
+        const syncResult = await syncMenuItemWithVariants(item.id)
         if (!syncResult.success) {
-          console.warn(`[Bulk Import] Meta Catalog Sync failed for '${item.name}': ${syncResult.error}`)
+          console.warn(`[Bulk Import] Meta Catalog Sync failed for '${item.name}'`)
         }
         
         successCount++

@@ -127,11 +127,12 @@ export async function processIncomingWhatsAppMessage(
   ) {
     if (interactiveId === "co_cancel" || cleanText === "cancel") {
       await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
-      const responseText = "❌ Checkout cancelled. Your cart items are preserved."
+      await clearCart(restaurant.id, sender)
+      const responseText = "❌ Order cancelled. Your cart has been cleared."
       if (restaurant.whatsapp_phone_number_id) {
         await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
       }
-      return await handleInitialGreeting(restaurant, sender)
+      return { handled: true, responseText, intent: "order_cancelled" }
     }
 
     if (interactiveId === "co_edit_cart" || cleanText === "edit cart") {
@@ -433,10 +434,6 @@ export async function processIncomingWhatsAppMessage(
 
   if (interactiveId === "cart_clear" || cleanText === "clear" || cleanText === "clear cart") {
     await clearCart(restaurant.id, sender)
-    const responseText = "🧹 Your cart has been cleared!"
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
-    }
     return await handleInitialGreeting(restaurant, sender)
   }
 
@@ -585,17 +582,56 @@ export async function handleInitialGreeting(
       }
     }
 
-    // Step 3: Send native catalog_message if at least one product is verified in Meta
+    // Step 3: Send the native catalog categorized by menu category!
     if (verifiedRetailerId) {
+      if (restaurant.logo_url) {
+        const { sendWhatsAppImageMessage } = await import("./client")
+        await sendWhatsAppImageMessage(
+          restaurant.whatsapp_phone_number_id,
+          sender,
+          restaurant.logo_url
+        )
+      }
+
+      // Group by categories
+      const { getMenuCategories } = await import("./menu")
+      const categories = await getMenuCategories(restaurant.id)
+      
+      const sections: Array<{ title: string; product_items: Array<{ product_retailer_id: string }> }> = []
+      let totalAdded = 0
+      
+      for (const cat of categories) {
+        if (sections.length >= 10 || totalAdded >= 30) break;
+        
+        const catItems = dbSyncedItems.filter(i => i.category_id === cat.id)
+        if (catItems.length === 0) continue;
+
+        const productItems = []
+        for (const item of catItems) {
+          if (totalAdded >= 30) break;
+          productItems.push({ product_retailer_id: item.meta_product_sku! })
+          totalAdded++
+        }
+
+        if (productItems.length > 0) {
+          sections.push({
+            title: cat.name.slice(0, 24),
+            product_items: productItems
+          })
+        }
+      }
+
       console.log(
-        `[WhatsApp Router] Sending native catalog_message for '${restaurant.name}' (catalog: ${catalogId}, thumbnail: ${verifiedRetailerId})`
+        `[WhatsApp Router] Sending native multi-product list for '${restaurant.name}' (catalog: ${catalogId}, items: ${totalAdded})`
       )
-      await sendWhatsAppCatalogMessage(
+      
+      const { sendWhatsAppMultiProductList } = await import("./client")
+      await sendWhatsAppMultiProductList(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
         catalogId,
-        verifiedRetailerId
+        sections
       )
       
       // Also offer Track Order as a quick action below the catalog
@@ -877,17 +913,45 @@ export async function handleNativeOrderMessage(
     await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity })
   }
 
-  // Set cart step to checkout name / address collection
-  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_NAME")
+  // Set cart step back to IDLE to pause the flow and wait for an action
+  await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
 
   const cart = await getCartDetails(restaurant.id, sender)
-  const responseText = `🛒 *Order Received from Catalog!*\n\nItems: ${cart?.item_count}\nSubtotal: *₹${cart?.subtotal.toFixed(2)}*\nDelivery Fee: *₹${cart?.delivery_fee.toFixed(2)}*\nTotal: *₹${cart?.total.toFixed(2)}*\n\nPlease reply with your *Full Name* to complete delivery setup:`
+  
+  const textLines = [`🛒 *Order Received from Catalog!*`]
+  if (cart) {
+    cart.items.forEach(i => {
+      textLines.push(`• ${i.name} × ${i.quantity}`)
+    })
+  }
+  const responseText = textLines.join("\n")
 
   if (restaurant.whatsapp_phone_number_id) {
+    // Send confirmation text
     await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+    
+    // Send Next Actions List
+    const { sendWhatsAppInteractiveList } = await import("./client")
+    await sendWhatsAppInteractiveList(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      "What would you like to do next?",
+      "Select Action",
+      [
+        {
+          title: "Options",
+          rows: [
+            { id: "action_initial_greeting", title: "🍽️ View Menu", description: "Browse more items" },
+            { id: "action_view_cart", title: "🛒 Manage Cart", description: "Update quantities & checkout" },
+            { id: "cart_clear", title: "🗑️ Empty Cart", description: "Clear cart & view menu" },
+            { id: "co_cancel", title: "❌ Cancel Order", description: "Stop ordering" },
+          ]
+        }
+      ]
+    )
   }
 
-  return { handled: true, responseText, intent: "native_order_received" }
+  return { handled: true, responseText, intent: "native_order_received_options" }
 }
 
 /**

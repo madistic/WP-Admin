@@ -124,6 +124,25 @@ export async function sendWhatsAppTextMessage(
 }
 
 /**
+ * Sends a standalone image message.
+ */
+export async function sendWhatsAppImageMessage(
+  phoneNumberId: string,
+  to: string,
+  imageUrl: string
+) {
+  return await sendWhatsAppCloudMessage(phoneNumberId, {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "image",
+    image: {
+      link: imageUrl,
+    },
+  })
+}
+
+/**
  * Sends interactive reply buttons (max 3 buttons).
  */
 export async function sendWhatsAppInteractiveButtons(

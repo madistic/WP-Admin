@@ -777,43 +777,39 @@ export async function createOrderFromCart(
  */
 export function formatCartText(cart: FormattedCartSummary): string {
   const lines: string[] = []
-  lines.push(`🛒 *Your Cart at ${cart.restaurant_name}:*\n`)
+  lines.push(`🛒 *Your Cart*\n`)
 
   if (cart.items.length === 0) {
     lines.push("Your cart is currently empty! 🍽️")
-    lines.push("\nReply 'menu' to start adding delicious items.")
+    lines.push("\nTap 'View Menu' to start adding items.")
     return lines.join("\n")
   }
 
   cart.items.forEach((item, idx) => {
-    const itemHeader = `${idx + 1}. *${item.name}* (x${item.quantity}) - ₹${item.line_total.toFixed(2)}`
-    lines.push(itemHeader)
+    lines.push(`🍛 *${item.name}*`)
+    lines.push(`➖  ${item.quantity}  ➕`)
+    lines.push(`₹${item.line_total.toFixed(2)}`)
     if (item.variant_name) {
-      lines.push(`   • Size: ${item.variant_name}`)
+      lines.push(`Size: ${item.variant_name}`)
     }
     if (item.addons_detail) {
-      lines.push(`   • Addons: ${item.addons_detail}`)
+      lines.push(`Addons: ${item.addons_detail}`)
     }
     if (item.special_instructions) {
-      lines.push(`   • Note: _"${item.special_instructions}"_`)
+      lines.push(`Note: _"${item.special_instructions}"_`)
     }
     if (!item.is_available) {
-      lines.push(`   ⚠️ _Item currently unavailable_`)
+      lines.push(`⚠️ _Item currently unavailable_`)
     }
+    lines.push("")
   })
 
-  lines.push(`\n💵 *Subtotal:* ₹${cart.subtotal.toFixed(2)}`)
+  lines.push(`────────────────`)
   if (cart.delivery_fee > 0) {
-    lines.push(`🛵 *Delivery Fee:* ₹${cart.delivery_fee.toFixed(2)}`)
+    lines.push(`Subtotal: ₹${cart.subtotal.toFixed(2)}`)
+    lines.push(`Delivery Fee: ₹${cart.delivery_fee.toFixed(2)}`)
   }
-  lines.push(`💰 *Total:* ₹${cart.total.toFixed(2)}`)
-
-  lines.push(`\n*Commands:*`)
-  lines.push(`• Reply *"checkout"* to place your order`)
-  lines.push(`• Reply *"note [item #] [instruction]"* to add notes (e.g. *"note 1 extra spicy"*)`)
-  lines.push(`• Reply *"+1 [item #]"* or *"-1 [item #]"* to adjust quantity`)
-  lines.push(`• Reply *"remove [item #]"* to delete an item`)
-  lines.push(`• Reply *"clear"* to empty cart`)
+  lines.push(`Total: *₹${cart.total.toFixed(2)}*`)
 
   return lines.join("\n")
 }

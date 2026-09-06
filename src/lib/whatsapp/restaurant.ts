@@ -23,6 +23,7 @@ export async function getRestaurantByWhatsAppPhoneNumberId(phoneNumberId: string
       whatsapp_phone_number_id: true,
       whatsapp_catalog_id: true,
       is_open: true,
+      logo_url: true,
       delivery_fee: true,
       minimum_order: true,
     },

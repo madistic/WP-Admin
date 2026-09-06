@@ -5,6 +5,7 @@ import Link from "next/link"
 import SidebarNav from "@/components/SidebarNav"
 import SignOutButton from "@/components/SignOutButton"
 import StoreStatusToggle from "@/components/StoreStatusToggle"
+import OrderAlertProvider from "@/components/OrderAlertProvider"
 import prisma from "@/lib/prisma"
 
 export default async function DashboardLayout({
@@ -26,6 +27,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans antialiased text-gray-900">
+      <OrderAlertProvider />
       {/* Persistent Sidebar */}
       <aside className="w-64 bg-slate-900 text-white flex-shrink-0 hidden md:flex flex-col border-r border-slate-800">
         <div className="p-5 border-b border-slate-800/80">

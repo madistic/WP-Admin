@@ -10,6 +10,7 @@ interface Restaurant {
   delivery_fee: number
   phone: string | null
   address: string | null
+  logo_url: string | null
 }
 
 export default function SettingsPage() {
@@ -65,6 +66,7 @@ export default function SettingsPage() {
     const formData = new FormData(e.currentTarget)
     const minimum_order = formData.get("minimum_order")
     const delivery_fee = formData.get("delivery_fee")
+    const logo_url = formData.get("logo_url")
 
     try {
       const res = await fetch("/api/restaurant", {
@@ -73,6 +75,7 @@ export default function SettingsPage() {
         body: JSON.stringify({
           minimum_order: Number(minimum_order),
           delivery_fee: Number(delivery_fee),
+          logo_url: logo_url ? String(logo_url) : null,
         }),
       })
 
@@ -159,6 +162,18 @@ export default function SettingsPage() {
               />
               <p className="text-[11px] text-slate-400 font-normal mt-1">Standard delivery charge applied to every order.</p>
             </div>
+          </div>
+          
+          <div>
+            <label className="block text-slate-700 font-medium mb-1">Restaurant Logo URL</label>
+            <input
+              type="url"
+              name="logo_url"
+              defaultValue={restaurant?.logo_url || ""}
+              placeholder="https://example.com/logo.jpg"
+              className="w-full p-2.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+            />
+            <p className="text-[11px] text-slate-400 font-normal mt-1">Provide a public URL (e.g. Google Drive image link) to be used in WhatsApp welcome messages.</p>
           </div>
 
           <div className="pt-2 flex justify-end">

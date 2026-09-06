@@ -61,6 +61,7 @@ export interface ResolvedRestaurantInfo {
   whatsapp_phone_number_id?: string | null
   whatsapp_catalog_id?: string | null
   is_open?: boolean
+  logo_url?: string | null
 }
 
 /**
@@ -128,17 +129,9 @@ export async function processIncomingWhatsAppMessage(
       await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
       const responseText = "❌ Checkout cancelled. Your cart items are preserved."
       if (restaurant.whatsapp_phone_number_id) {
-        await sendWhatsAppInteractiveButtons(
-          restaurant.whatsapp_phone_number_id,
-          sender,
-          responseText,
-          [
-            { id: "action_view_cart", title: "🛒 View Cart" },
-            { id: "action_categories", title: "🍽️ View Menu" },
-          ]
-        )
+        await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
       }
-      return { handled: true, responseText, intent: "checkout_cancelled" }
+      return await handleInitialGreeting(restaurant, sender)
     }
 
     if (interactiveId === "co_edit_cart" || cleanText === "edit cart") {
@@ -442,14 +435,9 @@ export async function processIncomingWhatsAppMessage(
     await clearCart(restaurant.id, sender)
     const responseText = "🧹 Your cart has been cleared!"
     if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [{ id: "action_categories", title: "🍽️ View Menu" }]
-      )
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
     }
-    return { handled: true, responseText, intent: "clear_cart" }
+    return await handleInitialGreeting(restaurant, sender)
   }
 
   // Check if user is replying with a special instruction note text
@@ -658,8 +646,8 @@ export async function handleTrackOrderPrompt(
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
   
-  // Try to find an active order first
-  const activeOrder = await prisma.order.findFirst({
+  // Try to find active orders
+  const activeOrders = await prisma.order.findMany({
     where: {
       restaurant_id: restaurant.id,
       customer_phone_snapshot: cleanPhone,
@@ -669,23 +657,36 @@ export async function handleTrackOrderPrompt(
     include: { items: true }
   })
 
-  if (activeOrder) {
-    return await handleOrderTrackingQuery(restaurant, sender, activeOrder.order_number)
+  if (activeOrders.length === 1) {
+    // If exactly one, just use the direct order tracking query logic
+    return await handleOrderTrackingQuery(restaurant, sender, activeOrders[0].order_number)
   }
 
-  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_TRACKING_ORDER_ID")
-  const responseText = "📦 *Order Tracking*\n\nPlease enter your *Order ID* (e.g. *ORD-123456*):"
+  if (activeOrders.length > 1) {
+    const lines = ["📦 *Your Active Orders*\n"]
+    activeOrders.forEach(o => {
+      lines.push(`• *${o.order_number}* - ${o.status.replace(/_/g, " ")}\n  Total: ₹${o.total.toFixed(2)}`)
+    })
+    const responseText = lines.join("\n")
 
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        [{ id: "action_initial_greeting", title: "🍽️ View Menu" }]
+      )
+    }
+    return { handled: true, responseText, intent: "track_multiple_orders" }
+  }
+
+  // 0 active orders
+  const responseText = "You have no active orders right now."
   if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      [{ id: "action_initial_greeting", title: "🔙 View Menu" }]
-    )
+    // Send them the native catalog instead so they can order
+    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
   }
-
-  return { handled: true, responseText, intent: "track_order_prompt" }
+  return await handleInitialGreeting(restaurant, sender)
 }
 
 export async function handleOrderTrackingQuery(
@@ -1129,19 +1130,10 @@ export async function handleViewCart(
   const cart = await getCartDetails(restaurant.id, sender)
 
   if (!cart || cart.items.length === 0) {
-    const text = "Your cart is currently empty! 🍽️"
     if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        text,
-        [
-          { id: "action_categories", title: "🍽️ Order Food" },
-          { id: "action_initial_greeting", title: "🔙 Main Menu" },
-        ]
-      )
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, "Your cart is currently empty! 🍽️")
     }
-    return { handled: true, responseText: text, intent: "cart_empty" }
+    return await handleInitialGreeting(restaurant, sender)
   }
 
   const responseText = formatCartText(cart)
@@ -1152,13 +1144,13 @@ export async function handleViewCart(
       const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
       rows.push({
         id: `cart_inc_${item.id}`,
-        title: `[ + ] ${cleanName}`.slice(0, 24),
-        description: `Current: ${item.quantity} (₹${item.unit_price.toFixed(2)} each)`.slice(0, 72),
+        title: `➕ Add 1 ${cleanName}`.slice(0, 24),
+        description: `Qty: ${item.quantity} → ${item.quantity + 1} (₹${item.unit_price.toFixed(2)})`.slice(0, 72),
       })
       rows.push({
         id: `cart_dec_${item.id}`,
-        title: `[ − ] ${cleanName}`.slice(0, 24),
-        description: `Current: ${item.quantity} (Reduce / Remove)`.slice(0, 72),
+        title: `➖ Remove 1 ${cleanName}`.slice(0, 24),
+        description: `Qty: ${item.quantity} → ${item.quantity - 1} ${item.quantity - 1 === 0 ? '(Remove)' : ''}`.trim().slice(0, 72),
       })
     })
 
@@ -1474,7 +1466,8 @@ export async function renderOrderConfirmation(
         { id: "co_confirm", title: "✅ Confirm Order" },
         { id: "action_edit_cart", title: "✏️ Edit Cart" },
         { id: "co_change_address", title: "📍 Change Address" },
-      ]
+      ],
+      { headerImageUrl: restaurant.logo_url || undefined }
     )
   }
 

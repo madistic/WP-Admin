@@ -20,7 +20,7 @@ export interface WhatsAppInteractiveButtonsPayload {
   type: "interactive"
   interactive: {
     type: "button"
-    header?: { type: "text"; text: string }
+    header?: { type: "text"; text: string } | { type: "image"; image: { link: string } }
     body: { text: string }
     footer?: { text: string }
     action: {
@@ -42,7 +42,7 @@ export interface WhatsAppInteractiveListPayload {
   type: "interactive"
   interactive: {
     type: "list"
-    header?: { type: "text"; text: string }
+    header?: { type: "text"; text: string } | { type: "image"; image: { link: string } }
     body: { text: string }
     footer?: { text: string }
     action: {
@@ -131,7 +131,7 @@ export async function sendWhatsAppInteractiveButtons(
   to: string,
   bodyText: string,
   buttons: Array<{ id: string; title: string }>,
-  options?: { headerText?: string; footerText?: string }
+  options?: { headerText?: string; headerImageUrl?: string; footerText?: string }
 ) {
   // Truncate button titles to 20 chars per Meta API limits
   const formattedButtons = buttons.slice(0, 3).map((b) => ({
@@ -156,7 +156,9 @@ export async function sendWhatsAppInteractiveButtons(
     },
   }
 
-  if (options?.headerText) {
+  if (options?.headerImageUrl) {
+    payload.interactive.header = { type: "image", image: { link: options.headerImageUrl } }
+  } else if (options?.headerText) {
     payload.interactive.header = { type: "text", text: options.headerText }
   }
   if (options?.footerText) {
@@ -178,7 +180,7 @@ export async function sendWhatsAppInteractiveList(
     title?: string
     rows: Array<{ id: string; title: string; description?: string }>
   }>,
-  options?: { headerText?: string; footerText?: string }
+  options?: { headerText?: string; headerImageUrl?: string; footerText?: string }
 ) {
   // Enforce Meta API limits (button title <= 20 chars, row title <= 24 chars, row description <= 72 chars)
   const formattedSections = sections.map((sec) => ({
@@ -205,7 +207,9 @@ export async function sendWhatsAppInteractiveList(
     },
   }
 
-  if (options?.headerText) {
+  if (options?.headerImageUrl) {
+    payload.interactive.header = { type: "image", image: { link: options.headerImageUrl } }
+  } else if (options?.headerText) {
     payload.interactive.header = { type: "text", text: options.headerText }
   }
   if (options?.footerText) {
@@ -246,6 +250,8 @@ export async function sendWhatsAppCatalogMessage(
       action,
     },
   }
+
+  console.log(`[Meta Catalog Debug] Sending catalog_message to ${to}. Payload:`, JSON.stringify(payload, null, 2))
 
   return await sendWhatsAppCloudMessage(phoneNumberId, payload)
 }

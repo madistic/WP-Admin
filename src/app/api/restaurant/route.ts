@@ -37,6 +37,7 @@ export async function PATCH(request: Request) {
         ...(body.minimum_order !== undefined && { minimum_order: parseFloat(body.minimum_order) }),
         ...(body.delivery_fee !== undefined && { delivery_fee: parseFloat(body.delivery_fee) }),
         ...(body.description !== undefined && { description: body.description }),
+        ...(body.logo_url !== undefined && { logo_url: body.logo_url }),
       },
     })
 

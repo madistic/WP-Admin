@@ -889,13 +889,12 @@ export async function handleNativeOrderMessage(
     await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity })
   }
 
-  // Set cart step so next action goes into name flow
+  // Set cart step so next action goes into checkout
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
 
-  const cart = await getCartDetails(restaurant.id, sender)
-  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+  const cleanPhoneO = sender.startsWith("+") ? sender : `+${sender}`
   const existingCustomer = await prisma.customer.findUnique({
-    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhone } },
+    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhoneO } },
     select: { name: true }
   })
 
@@ -908,8 +907,7 @@ export async function handleNativeOrderMessage(
       sender,
       responseText,
       [
-        { id: "action_checkout", title: existingCustomer?.name ? "✅ Continue" : "👤 Enter Name" },
-        { id: "co_change_name", title: "✏️ Change Name" },
+        { id: "action_checkout", title: "✅ Continue" },
         { id: "co_cancel", title: "❌ Cancel Order" },
       ]
     )
@@ -1417,6 +1415,7 @@ async function promptForAddressSelection(
       }))
       listRows.push({ id: "loc_share_current", title: "📍 Share New Location", description: "Send a WhatsApp location pin" })
       listRows.push({ id: "loc_enter_manual", title: "✍️ Enter Manually", description: "Type your new address" })
+      listRows.push({ id: "co_change_name", title: "✏️ Change Name", description: "Update your name" })
       listRows.push({ id: "co_empty_cart", title: "🗑️ Empty Cart", description: "Clear cart & start over" })
       listRows.push({ id: "co_cancel", title: "❌ Cancel Order", description: "Cancel and clear cart" })
 

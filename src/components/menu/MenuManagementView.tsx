@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import CategoryModal from "@/components/menu/CategoryModal"
 import MenuItemModal from "@/components/menu/MenuItemModal"
 import DuplicateModal from "@/components/menu/DuplicateModal"
+import BulkImportModal from "@/components/menu/BulkImportModal"
 
 interface MenuItem {
   id: string
@@ -73,6 +74,8 @@ export default function MenuManagementView() {
 
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false)
   const [itemToDuplicate, setItemToDuplicate] = useState<MenuItem | null>(null)
+
+  const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState(false)
 
   const [togglingId, setTogglingId] = useState<string | null>(null)
 
@@ -288,6 +291,12 @@ export default function MenuManagementView() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsBulkImportModalOpen(true)}
+            className="px-3.5 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg shadow-xs hover:bg-indigo-100 transition-colors"
+          >
+            📥 Bulk Import
+          </button>
           <button
             onClick={() => {
               setCategoryToEdit(null)
@@ -738,6 +747,13 @@ export default function MenuManagementView() {
         onClose={() => setIsDuplicateModalOpen(false)}
         onSuccess={fetchMenuData}
         itemToDuplicate={itemToDuplicate}
+      />
+
+      <BulkImportModal
+        isOpen={isBulkImportModalOpen}
+        onClose={() => setIsBulkImportModalOpen(false)}
+        onSuccess={fetchMenuData}
+        categories={categories}
       />
     </div>
   )

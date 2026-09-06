@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 
 interface VariantInput {
   name: string
@@ -54,6 +54,27 @@ export default function MenuItemModal({
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Sync state when itemToEdit changes
+  useEffect(() => {
+    if (isOpen) {
+      setCategoryId(itemToEdit?.category_id || (categories[0]?.id || ""))
+      setName(itemToEdit?.name || "")
+      setDescription(itemToEdit?.description || "")
+      setPrice(itemToEdit?.price ? String(itemToEdit.price) : "")
+      setImageUrl(itemToEdit?.image_url || "")
+      setIsAvailable(itemToEdit?.is_available ?? true)
+      setIsActive(itemToEdit?.is_active ?? true)
+      setIsVeg(itemToEdit?.is_veg ?? true)
+      setPrepTimeMinutes(itemToEdit?.prep_time_minutes ? String(itemToEdit.prep_time_minutes) : "15")
+      setIsTodaySpecial(itemToEdit?.is_today_special ?? false)
+      setSpecialUntilDate(itemToEdit?.special_until_date ? new Date(itemToEdit.special_until_date).toISOString().split("T")[0] : "")
+      setIsBestseller(itemToEdit?.is_bestseller ?? false)
+      setVariants(itemToEdit?.variants?.map((v: any) => ({ name: v.name, price: String(v.price), is_available: v.is_available })) || [])
+      setAddons(itemToEdit?.addons?.map((a: any) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || [])
+      setError(null)
+    }
+  }, [itemToEdit, isOpen, categories])
 
   if (!isOpen) return null
 

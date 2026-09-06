@@ -897,11 +897,9 @@ export async function handleCategoryProductsSelection(
   sender: string,
   categoryId: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const [categories, items, { selections }] = await Promise.all([
-    getWhatsAppCategories(restaurant.id),
-    getWhatsAppItems(restaurant.id, { categoryId }),
-    getCategorySelections(restaurant.id, sender),
-  ])
+  const categories = await getWhatsAppCategories(restaurant.id)
+  const items = await getWhatsAppItems(restaurant.id, { categoryId })
+  const { selections } = await getCategorySelections(restaurant.id, sender)
 
   const category = categories.find((c) => c.id === categoryId)
   const catName = category ? category.title : "Category"

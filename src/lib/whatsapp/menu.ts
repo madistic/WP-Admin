@@ -198,10 +198,8 @@ export async function searchMenuItems(restaurantId: string, searchTerm: string) 
 export async function getRestaurantMenu(restaurantId: string) {
   if (!restaurantId) return { categories: [], items: [] }
 
-  const [categories, items] = await Promise.all([
-    getMenuCategories(restaurantId),
-    getMenuItems(restaurantId),
-  ])
+  const categories = await getMenuCategories(restaurantId)
+  const items = await getMenuItems(restaurantId)
 
   return {
     categories,

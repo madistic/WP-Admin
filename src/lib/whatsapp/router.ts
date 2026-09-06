@@ -127,12 +127,8 @@ export async function processIncomingWhatsAppMessage(
       cart.checkout_step === "AWAITING_ADDRESS_SAVE_DECISION")
   ) {
     if (interactiveId === "co_cancel" || cleanText === "cancel") {
-      await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
       await clearCart(restaurant.id, sender)
-      const responseText = "❌ Order cancelled. Your cart has been cleared."
-      if (restaurant.whatsapp_phone_number_id) {
-        await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
-      }
+      await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
       return await handleInitialGreeting(restaurant, sender)
     }
 
@@ -1415,8 +1411,6 @@ async function promptForAddressSelection(
       }))
       listRows.push({ id: "loc_share_current", title: "📍 Share New Location", description: "Send a WhatsApp location pin" })
       listRows.push({ id: "loc_enter_manual", title: "✍️ Enter Manually", description: "Type your new address" })
-      listRows.push({ id: "co_change_name", title: "✏️ Change Name", description: "Update your name" })
-      listRows.push({ id: "co_empty_cart", title: "🗑️ Empty Cart", description: "Clear cart & start over" })
       listRows.push({ id: "co_cancel", title: "❌ Cancel Order", description: "Cancel and clear cart" })
 
       await sendWhatsAppInteractiveList(

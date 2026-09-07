@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
 
 export async function POST(request: Request) {
   try {
@@ -16,6 +17,11 @@ export async function POST(request: Request) {
     }
 
     const restaurantId = session.user.restaurant_id
+
+    const duplicate = await prisma.menuCategory.findFirst({
+      where: { restaurant_id: restaurantId, name: { equals: name.trim(), mode: "insensitive" } },
+    })
+    if (duplicate) return NextResponse.json({ error: "A category with this name already exists." }, { status: 409 })
 
     const count = await prisma.menuCategory.count({ where: { restaurant_id: restaurantId } })
 
@@ -54,6 +60,19 @@ export async function PUT(request: Request) {
 
     if (!existing) return NextResponse.json({ error: "Category not found" }, { status: 404 })
 
+    if (name !== undefined) {
+      const normalizedName = name.trim()
+      if (!normalizedName) return NextResponse.json({ error: "Category name is required" }, { status: 400 })
+      const duplicate = await prisma.menuCategory.findFirst({
+        where: {
+          restaurant_id: restaurantId,
+          name: { equals: normalizedName, mode: "insensitive" },
+          NOT: { id },
+        },
+      })
+      if (duplicate) return NextResponse.json({ error: "A category with this name already exists." }, { status: 409 })
+    }
+
     const updated = await prisma.menuCategory.update({
       where: { id },
       data: {
@@ -63,6 +82,14 @@ export async function PUT(request: Request) {
         ...(sort_order !== undefined && { sort_order: Number(sort_order) }),
       },
     })
+
+    if (name !== undefined && name.trim() !== existing.name) {
+      const items = await prisma.menuItem.findMany({
+        where: { category_id: id, is_active: true, deleted_at: null },
+        select: { id: true },
+      })
+      await Promise.allSettled(items.map((item) => syncMenuItemWithVariants(item.id)))
+    }
 
     return NextResponse.json(updated)
   } catch (error: any) {
@@ -78,7 +105,6 @@ export async function DELETE(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const id = searchParams.get("id")
-    const force = searchParams.get("force") === "true"
 
     if (!id) return NextResponse.json({ error: "Category ID is required" }, { status: 400 })
 
@@ -91,11 +117,10 @@ export async function DELETE(request: Request) {
 
     if (!category) return NextResponse.json({ error: "Category not found" }, { status: 404 })
 
-    // Rule 2: Prevent deletion if category contains menu items unless forced
-    if (category._count.items > 0 && !force) {
+    if (category._count.items > 0) {
       return NextResponse.json(
         {
-          error: `Category contains ${category._count.items} menu item(s). Move or delete items first.`,
+          error: `Category contains ${category._count.items} menu item(s). Move or delete items before deleting the category.`,
           hasItems: true,
           itemCount: category._count.items,
         },
@@ -108,8 +133,8 @@ export async function DELETE(request: Request) {
     })
 
     return NextResponse.json({ success: true })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Delete Category Error:", error)
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to delete category" }, { status: 500 })
   }
 }

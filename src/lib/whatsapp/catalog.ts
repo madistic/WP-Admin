@@ -45,7 +45,7 @@ async function scanCatalogForProduct(
   catalogId: string,
   retailerId: string,
   token: string
-): Promise<{ found: boolean; metaProductId?: string }> {
+): Promise<{ found: boolean; metaProductId?: string; error?: string }> {
   let nextUrl: string | null =
     `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/products?fields=id,retailer_id,name&limit=250`
 
@@ -68,7 +68,7 @@ async function scanCatalogForProduct(
         `[Meta Catalog Scan] Network error on page ${pageCount} for catalog ${catalogId}:`,
         networkErr?.message
       )
-      return { found: false }
+      return { found: false, error: "Network error while verifying catalog product" }
     }
 
     if (!res.ok) {
@@ -76,7 +76,7 @@ async function scanCatalogForProduct(
         `[Meta Catalog Scan] HTTP ${res.status} on page ${pageCount} for catalog ${catalogId}:`,
         data?.error?.message || data
       )
-      return { found: false }
+      return { found: false, error: `Meta verification returned HTTP ${res.status}` }
     }
 
     const products: any[] = data?.data ?? []
@@ -128,7 +128,7 @@ export async function checkProductExistsInMeta(
   )
   return {
     exists: false,
-    error: `Product '${retailerId}' not found in Meta Catalogue after paginated scan`,
+    error: result.error || `Product '${retailerId}' not found in Meta Catalogue after paginated scan`,
   }
 }
 
@@ -373,18 +373,28 @@ export async function deleteProductFromMetaCatalog(
       `[Meta Catalog Delete] Batch accepted for '${itemName}' (retailer_id: ${retailerId}). Verifying removal...`
     )
 
-    // Verify the product is actually gone
-    const stillExists = await checkProductExistsInMeta(catalogId, retailerId, itemName)
-    if (stillExists.exists) {
-      const errMsg = `Product '${retailerId}' still present in catalog after DELETE batch`
-      console.error(`[Meta Catalog Delete] ${errMsg}`)
-      return { success: false, error: errMsg }
+    // Meta applies batch deletes asynchronously. Poll the catalog without
+    // resubmitting DELETE, using bounded backoff to allow replication to settle.
+    const verificationDelaysMs = [2000, 4000, 6000, 8000, 10000]
+    let lastVerificationError: string | undefined
+    for (const delayMs of verificationDelaysMs) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+      const verification = await checkProductExistsInMeta(catalogId, retailerId, itemName)
+      if (!verification.exists && !verification.error?.startsWith("Network error") && !verification.error?.startsWith("Meta verification")) {
+        console.log(
+          `[Meta Catalog Delete] Confirmed: '${itemName}' (retailer_id: ${retailerId}) removed from catalog ${catalogId}`
+        )
+        return { success: true }
+      }
+      lastVerificationError = verification.error
     }
 
-    console.log(
-      `[Meta Catalog Delete] Confirmed: '${itemName}' (retailer_id: ${retailerId}) removed from catalog ${catalogId}`
-    )
-    return { success: true }
+    const errMsg = lastVerificationError?.startsWith("Network error") || lastVerificationError?.startsWith("Meta verification")
+      ? `Unable to verify deletion of '${retailerId}': ${lastVerificationError}`
+      : `Product '${retailerId}' still present in catalog after asynchronous DELETE verification`
+    console.error(`[Meta Catalog Delete] ${errMsg}`)
+    return { success: false, error: errMsg }
+
   } catch (err: any) {
     console.error(
       `[Meta Catalog Delete] Exception for '${itemName}' (retailer_id: ${retailerId}):`,

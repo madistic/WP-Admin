@@ -219,12 +219,18 @@ export default function MenuManagementView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, item_ids: selectedItemIds }),
       })
-      if (res.ok) {
-        setSelectedItemIds([])
-        await fetchMenuData()
+      const data: { error?: string; catalogWarnings?: string[] } = await res.json()
+      if (!res.ok) throw new Error(data.error || "Bulk action failed")
+
+      setSelectedItemIds([])
+      await fetchMenuData()
+      if (data.catalogWarnings && data.catalogWarnings.length > 0) {
+        window.alert(`Menu items deleted, but some Meta Catalog cleanup tasks failed:\n${data.catalogWarnings.join("\n")}`)
       }
       } catch (err) {
+        const message = err instanceof Error ? err.message : "Bulk action failed"
         console.error("Bulk action error", err)
+        window.alert(message)
       } finally {
         setBulkActionInProgress(null)
       }

@@ -191,7 +191,8 @@ export default function MenuManagementView() {
     if (!window.confirm(`Delete menu item "${item.name}"? This action cannot be undone.`)) return
     await runAction(`item-delete-${item.id}`, async () => {
       try {
-      const res = await fetch(`/api/menu/items/${item.id}`, { method: "DELETE" })
+      const itemId = String(item.id)
+      const res = await fetch(`/api/menu/items/${encodeURIComponent(itemId)}`, { method: "DELETE" })
       if (!res.ok) {
         const data: { error?: string } = await res.json()
         throw new Error(data.error || "Failed to delete menu item")

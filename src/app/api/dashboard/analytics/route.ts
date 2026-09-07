@@ -194,7 +194,6 @@ export async function GET(request: Request) {
 
     for (const order of validCurrent) {
       for (const item of order.items) {
-        if (!item.menu_item_id) continue
         const existing = itemSalesMap.get(item.menu_item_id)
         if (existing) {
           existing.unitsSold += item.quantity

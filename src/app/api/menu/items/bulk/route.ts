@@ -76,9 +76,28 @@ export async function POST(request: Request) {
         }
       }
 
+      const referencedItems = await prisma.orderItem.findMany({
+        where: { menu_item_id: { in: validIds } },
+        select: { menu_item_id: true },
+        distinct: ["menu_item_id"],
+      })
+      const referencedIds = referencedItems.map((item) => item.menu_item_id)
+      const unusedIds = validIds.filter((id) => !referencedIds.includes(id))
+
       await prisma.$transaction(async (tx) => {
         await tx.categoryItemSelection.deleteMany({ where: { menu_item_id: { in: validIds } } })
-        await tx.menuItem.deleteMany({ where: { id: { in: validIds } } })
+        await tx.whatsAppCartItem.deleteMany({ where: { menu_item_id: { in: validIds } } })
+        await tx.menuItem.updateMany({
+          where: { id: { in: referencedIds } },
+          data: {
+            is_active: false,
+            is_available: false,
+            is_today_special: false,
+            special_until_date: null,
+            deleted_at: new Date(),
+          },
+        })
+        await tx.menuItem.deleteMany({ where: { id: { in: unusedIds } } })
       })
     } else {
       return NextResponse.json({ error: "Invalid action" }, { status: 400 })

@@ -77,6 +77,7 @@ export async function getMenuItems(restaurantId: string, options: GetMenuItemsOp
     restaurant_id: restaurantId,
     is_active: true,
     is_available: true,
+    deleted_at: null,
     category: {
       is_active: true,
     },

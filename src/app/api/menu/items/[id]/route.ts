@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
+import { Prisma } from "@prisma/client"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import {
@@ -74,8 +75,13 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let itemId = ""
   try {
-    const { id: itemId } = await params
+    const { id } = await params
+    itemId = id
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(itemId)) {
+      return NextResponse.json({ error: "Menu item ID must be a UUID" }, { status: 400 })
+    }
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
@@ -88,71 +94,72 @@ export async function DELETE(
 
     if (!existing) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
 
-    // Resolve catalog ID for this restaurant
+    const orderItemCount = await prisma.orderItem.count({ where: { menu_item_id: itemId } })
+
+    // Resolve catalog ID for this restaurant.
     const catalogId =
       existing.restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
 
     // Stable retailer_id that was used when the product was synced to Meta
     const retailerId = existing.meta_product_sku
 
-    if (retailerId && catalogId) {
-      // Step 1: Delete from Meta Catalogue FIRST
-      const metaDeleteResult = await deleteProductFromMetaCatalog(
-        catalogId,
-        retailerId,
-        existing.name
-      )
-
-      if (!metaDeleteResult.success) {
-        // Do NOT delete the DB record — preserve it so the admin can retry
-        console.error(
-          `[Meta Catalog Delete] Failed to delete '${existing.name}' (retailer_id: ${retailerId}) from Meta. DB record preserved for retry. Error: ${metaDeleteResult.error}`
-        )
-        return NextResponse.json(
-          {
-            error: `Failed to remove product from Meta Catalogue: ${metaDeleteResult.error}. The menu item has been preserved — please retry deletion.`,
-          },
-          { status: 502 }
-        )
-      }
-
-      console.log(
-        `[Meta Catalog Delete] Product '${existing.name}' (retailer_id: ${retailerId}) removed from Meta. Proceeding to delete DB record.`
-      )
-
-      for (const variant of existing.variants) {
-        const variantRetailerId = `${retailerId}__var__${variant.id}`
-        const variantDeleteResult = await deleteProductFromMetaCatalog(
-          catalogId,
-          variantRetailerId,
-          `${existing.name} [${variant.name}]`
-        )
-
-        if (!variantDeleteResult.success) {
-          return NextResponse.json(
-            {
-              error: `Failed to remove variant '${variant.name}' from Meta Catalogue: ${variantDeleteResult.error}. The menu item has been preserved — please retry deletion.`,
-            },
-            { status: 502 }
-          )
-        }
-      }
-    } else {
-      // No Meta product was ever synced — skip Meta deletion entirely
-      console.log(
-        `[Meta Catalog Delete] '${existing.name}' has no meta_product_sku — skipping Meta deletion, proceeding to delete DB record.`
-      )
-    }
-
-    // Step 2: Only delete DB record after Meta deletion confirmed (or item was never synced)
+    let archived = false
     await prisma.$transaction(async (tx) => {
       await tx.categoryItemSelection.deleteMany({ where: { menu_item_id: itemId } })
+      await tx.whatsAppCartItem.deleteMany({ where: { menu_item_id: itemId } })
+
+      const orderItemCount = await tx.orderItem.count({ where: { menu_item_id: itemId } })
+      if (orderItemCount > 0) {
+        archived = true
+        await tx.menuItem.update({
+          where: { id: itemId },
+          data: {
+            is_active: false,
+            is_available: false,
+            is_today_special: false,
+            special_until_date: null,
+            deleted_at: new Date(),
+          },
+        })
+        return
+      }
+
       await tx.menuItem.delete({ where: { id: itemId } })
     })
 
-    return NextResponse.json({ success: true })
-  } catch (error: any) {
-    console.error("Delete Menu Item Error:", error)
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
+    if (retailerId && catalogId) {
+      const productResult = await deleteProductFromMetaCatalog(catalogId, retailerId, existing.name)
+      if (!productResult.success) {
+        console.warn(`[Meta Catalog Delete] Failed for '${existing.name}': ${productResult.error}`)
+      }
+
+      for (const variant of existing.variants) {
+        const variantResult = await deleteProductFromMetaCatalog(
+          catalogId,
+          `${retailerId}__var__${variant.id}`,
+          `${existing.name} [${variant.name}]`
+        )
+        if (!variantResult.success) {
+          console.warn(`[Meta Catalog Delete] Failed for variant '${variant.name}': ${variantResult.error}`)
+        }
+      }
+    }
+
+    return NextResponse.json({ success: true, archived })
+  } catch (error: unknown) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      console.error("Delete Menu Item foreign-key constraint failed:", {
+        code: error.code,
+        meta: error.meta,
+      })
+      return NextResponse.json(
+        { error: "Menu item cannot be deleted because related data still references it.", code: error.code },
+        { status: 409 }
+      )
+    }
+
+    const message = error instanceof Error ? error.message : "Unknown delete error"
+    console.error("Delete Menu Item Error:", { itemId, error })
+    return NextResponse.json({ error: "Failed to delete menu item", details: message }, { status: 500 })
   }
 }

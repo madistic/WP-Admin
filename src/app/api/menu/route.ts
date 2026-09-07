@@ -39,7 +39,7 @@ export async function GET() {
 
     // 3. Fetch all items with variants and add-ons sorted by sort_order
     const items = await prisma.menuItem.findMany({
-      where: { restaurant_id: restaurantId },
+      where: { restaurant_id: restaurantId, deleted_at: null },
       include: {
         category: true,
         variants: { orderBy: { sort_order: "asc" } },

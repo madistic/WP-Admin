@@ -5,7 +5,7 @@ import Link from "next/link"
 
 type OrderItem = {
   id: string
-  menu_item_id: string | null
+  menu_item_id: string
   item_name_snapshot: string
   unit_price_snapshot: number
   quantity: number

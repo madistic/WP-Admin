@@ -60,7 +60,6 @@ export async function GET(
     for (const order of completedOrders) {
       for (const item of order.items) {
         // Fetch menu item category snapshot if available
-        if (!item.menu_item_id) continue
         const menuItem = await prisma.menuItem.findUnique({
           where: { id: item.menu_item_id },
           include: { category: true },

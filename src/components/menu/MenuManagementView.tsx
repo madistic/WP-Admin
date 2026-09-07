@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import CategoryModal from "@/components/menu/CategoryModal"
 import MenuItemModal from "@/components/menu/MenuItemModal"
 import DuplicateModal from "@/components/menu/DuplicateModal"
@@ -78,6 +78,23 @@ export default function MenuManagementView() {
   const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState(false)
 
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [bulkActionInProgress, setBulkActionInProgress] = useState<string | null>(null)
+  const [pendingActions, setPendingActions] = useState<Set<string>>(new Set())
+  const pendingActionsRef = useRef(new Set<string>())
+
+  async function runAction(key: string, operation: () => Promise<void>) {
+    if (pendingActionsRef.current.has(key)) return
+    pendingActionsRef.current.add(key)
+    setPendingActions(new Set(pendingActionsRef.current))
+    try {
+      await operation()
+    } finally {
+      pendingActionsRef.current.delete(key)
+      setPendingActions(new Set(pendingActionsRef.current))
+    }
+  }
+
+  const isActionPending = (key: string) => pendingActions.has(key)
 
   useEffect(() => {
     fetchMenuData()
@@ -102,8 +119,9 @@ export default function MenuManagementView() {
 
   // Quick Toggles
   async function toggleItemProperty(itemId: string, property: string, currentValue: boolean) {
-    setTogglingId(itemId)
-    try {
+    await runAction(`item-toggle-${itemId}`, async () => {
+      setTogglingId(itemId)
+      try {
       const res = await fetch(`/api/menu/items/${itemId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -112,25 +130,28 @@ export default function MenuManagementView() {
       if (res.ok) {
         await fetchMenuData()
       }
-    } catch (err) {
-      console.error("Toggle error", err)
-    } finally {
-      setTogglingId(null)
-    }
+      } catch (err) {
+        console.error("Toggle error", err)
+      } finally {
+        setTogglingId(null)
+      }
+    })
   }
 
   // Quick Category Active Toggle
   async function toggleCategoryActive(cat: Category) {
-    try {
+    await runAction(`category-toggle-${cat.id}`, async () => {
+      try {
       const res = await fetch("/api/menu/categories", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: cat.id, is_active: !cat.is_active }),
       })
-      if (res.ok) fetchMenuData()
-    } catch (err) {
-      console.error("Category toggle error", err)
-    }
+      if (res.ok) await fetchMenuData()
+      } catch (err) {
+        console.error("Category toggle error", err)
+      }
+    })
   }
 
   // Delete Category with warning check
@@ -149,29 +170,39 @@ export default function MenuManagementView() {
   }
 
   async function deleteCategory(id: string, force: boolean) {
-    try {
+    await runAction(`category-delete-${id}`, async () => {
+      try {
       const res = await fetch(`/api/menu/categories?id=${id}${force ? "&force=true" : ""}`, {
         method: "DELETE",
       })
-      if (res.ok) fetchMenuData()
+      if (res.ok) await fetchMenuData()
       else {
         const data = await res.json()
         alert(data.error || "Failed to delete category")
       }
-    } catch (err) {
-      console.error(err)
-    }
+      } catch (err) {
+        console.error(err)
+      }
+    })
   }
 
   // Delete Menu Item
   async function handleDeleteItem(item: MenuItem) {
     if (!window.confirm(`Delete menu item "${item.name}"? This action cannot be undone.`)) return
-    try {
+    await runAction(`item-delete-${item.id}`, async () => {
+      try {
       const res = await fetch(`/api/menu/items/${item.id}`, { method: "DELETE" })
-      if (res.ok) fetchMenuData()
-    } catch (err) {
-      console.error(err)
-    }
+      if (!res.ok) {
+        const data: { error?: string } = await res.json()
+        throw new Error(data.error || "Failed to delete menu item")
+      }
+      await fetchMenuData()
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to delete menu item"
+        console.error(err)
+        window.alert(message)
+      }
+    })
   }
 
   // Bulk Actions
@@ -179,7 +210,9 @@ export default function MenuManagementView() {
     if (selectedItemIds.length === 0) return
     if (action === "delete" && !window.confirm(`Delete ${selectedItemIds.length} selected item(s)?`)) return
 
-    try {
+    await runAction("bulk-action", async () => {
+      setBulkActionInProgress(action)
+      try {
       const res = await fetch("/api/menu/items/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -187,11 +220,14 @@ export default function MenuManagementView() {
       })
       if (res.ok) {
         setSelectedItemIds([])
-        fetchMenuData()
+        await fetchMenuData()
       }
-    } catch (err) {
-      console.error("Bulk action error", err)
-    }
+      } catch (err) {
+        console.error("Bulk action error", err)
+      } finally {
+        setBulkActionInProgress(null)
+      }
+    })
   }
 
   // Checkbox Selection
@@ -218,15 +254,18 @@ export default function MenuManagementView() {
     nextCategories[targetIdx] = temp
     setCategories(nextCategories)
 
-    try {
+    await runAction("category-reorder", async () => {
+      try {
       await fetch("/api/menu/categories/reorder", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ordered_ids: nextCategories.map((c) => c.id) }),
       })
-    } catch (err) {
-      console.error("Reorder failed", err)
-    }
+      } catch (err) {
+        console.error("Reorder failed", err)
+        await fetchMenuData()
+      }
+    })
   }
 
   async function moveItemOrder(itemIndex: number, direction: "up" | "down", currentFiltered: MenuItem[]) {
@@ -238,16 +277,18 @@ export default function MenuManagementView() {
     nextFiltered[itemIndex] = nextFiltered[targetIdx]
     nextFiltered[targetIdx] = temp
 
-    try {
+    await runAction("item-reorder", async () => {
+      try {
       await fetch("/api/menu/items/reorder", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ordered_ids: nextFiltered.map((i) => i.id) }),
       })
-      fetchMenuData()
-    } catch (err) {
-      console.error("Reorder items failed", err)
-    }
+      await fetchMenuData()
+      } catch (err) {
+        console.error("Reorder items failed", err)
+      }
+    })
   }
 
   // Filtered List Computation
@@ -382,7 +423,7 @@ export default function MenuManagementView() {
               {/* Reorder Arrows */}
               <div className="flex items-center space-x-0.5 ml-1 pl-1 border-l">
                 <button
-                  disabled={idx === 0}
+                  disabled={idx === 0 || isActionPending("category-reorder")}
                   onClick={() => moveCategoryOrder(idx, "up")}
                   className="hover:text-indigo-600 disabled:opacity-30 text-[10px]"
                   title="Move category left"
@@ -390,7 +431,7 @@ export default function MenuManagementView() {
                   ◀
                 </button>
                 <button
-                  disabled={idx === categories.length - 1}
+                  disabled={idx === categories.length - 1 || isActionPending("category-reorder")}
                   onClick={() => moveCategoryOrder(idx, "down")}
                   className="hover:text-indigo-600 disabled:opacity-30 text-[10px]"
                   title="Move category right"
@@ -402,6 +443,7 @@ export default function MenuManagementView() {
               {/* Category Quick Actions */}
               <button
                 onClick={() => toggleCategoryActive(cat)}
+                disabled={isActionPending(`category-toggle-${cat.id}`)}
                 className={`ml-1 text-[10px] font-bold ${cat.is_active ? "text-green-600" : "text-gray-400"}`}
                 title="Toggle Category Active/Inactive"
               >
@@ -419,6 +461,7 @@ export default function MenuManagementView() {
               </button>
               <button
                 onClick={() => handleDeleteCategory(cat)}
+                disabled={isActionPending(`category-delete-${cat.id}`)}
                 className="text-gray-400 hover:text-red-600 text-[11px]"
                 title="Delete Category"
               >
@@ -495,33 +538,38 @@ export default function MenuManagementView() {
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => handleBulkAction("mark_available")}
+                disabled={isActionPending("bulk-action")}
                 className="px-2.5 py-1 bg-white border border-indigo-300 text-indigo-700 font-medium rounded hover:bg-indigo-100"
               >
-                Mark Available
+                {bulkActionInProgress === "mark_available" ? "Processing..." : "Mark Available"}
               </button>
               <button
                 onClick={() => handleBulkAction("mark_out_of_stock")}
+                disabled={isActionPending("bulk-action")}
                 className="px-2.5 py-1 bg-white border border-indigo-300 text-indigo-700 font-medium rounded hover:bg-indigo-100"
               >
-                Mark Out of Stock
+                {bulkActionInProgress === "mark_out_of_stock" ? "Processing..." : "Mark Out of Stock"}
               </button>
               <button
                 onClick={() => handleBulkAction("activate")}
+                disabled={isActionPending("bulk-action")}
                 className="px-2.5 py-1 bg-white border border-indigo-300 text-indigo-700 font-medium rounded hover:bg-indigo-100"
               >
-                Activate
+                {bulkActionInProgress === "activate" ? "Processing..." : "Activate"}
               </button>
               <button
                 onClick={() => handleBulkAction("deactivate")}
+                disabled={isActionPending("bulk-action")}
                 className="px-2.5 py-1 bg-white border border-indigo-300 text-indigo-700 font-medium rounded hover:bg-indigo-100"
               >
-                Deactivate
+                {bulkActionInProgress === "deactivate" ? "Processing..." : "Deactivate"}
               </button>
               <button
                 onClick={() => handleBulkAction("delete")}
+                disabled={isActionPending("bulk-action")}
                 className="px-2.5 py-1 bg-red-600 text-white font-medium rounded hover:bg-red-700"
               >
-                Delete Selected
+                {bulkActionInProgress === "delete" ? "Processing..." : "Delete Selected"}
               </button>
             </div>
           </div>
@@ -627,14 +675,14 @@ export default function MenuManagementView() {
                     <td className="py-3 px-4">
                       <button
                         onClick={() => toggleItemProperty(item.id, "is_available", item.is_available)}
-                        disabled={togglingId === item.id}
+                        disabled={togglingId === item.id || isActionPending(`item-toggle-${item.id}`)}
                         className={`px-3 py-1 rounded-full text-xs font-bold transition ${
                           item.is_available
                             ? "bg-green-100 text-green-800 hover:bg-green-200"
                             : "bg-red-100 text-red-800 hover:bg-red-200"
                         }`}
                       >
-                        {item.is_available ? "🟢 Available" : "🔴 Out of Stock"}
+                        {isActionPending(`item-toggle-${item.id}`) ? "Updating..." : item.is_available ? "🟢 Available" : "🔴 Out of Stock"}
                       </button>
                     </td>
 
@@ -642,14 +690,14 @@ export default function MenuManagementView() {
                     <td className="py-3 px-4">
                       <button
                         onClick={() => toggleItemProperty(item.id, "is_today_special", item.is_today_special)}
-                        disabled={togglingId === item.id}
+                        disabled={togglingId === item.id || isActionPending(`item-toggle-${item.id}`)}
                         className={`px-2.5 py-1 rounded-md text-xs font-medium border transition ${
                           item.is_today_special
                             ? "bg-amber-100 border-amber-300 text-amber-900 font-bold"
                             : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50"
                         }`}
                       >
-                        {item.is_today_special ? "⭐ Special" : "+ Mark Special"}
+                        {isActionPending(`item-toggle-${item.id}`) ? "Updating..." : item.is_today_special ? "⭐ Special" : "+ Mark Special"}
                       </button>
                     </td>
 
@@ -657,14 +705,14 @@ export default function MenuManagementView() {
                     <td className="py-3 px-4">
                       <button
                         onClick={() => toggleItemProperty(item.id, "is_active", item.is_active)}
-                        disabled={togglingId === item.id}
+                        disabled={togglingId === item.id || isActionPending(`item-toggle-${item.id}`)}
                         className={`px-2.5 py-1 rounded text-xs font-semibold ${
                           item.is_active && item.category.is_active
                             ? "text-blue-700 bg-blue-50"
                             : "text-gray-500 bg-gray-100"
                         }`}
                       >
-                        {item.is_active && item.category.is_active ? "Active ●" : "Inactive ○"}
+                        {isActionPending(`item-toggle-${item.id}`) ? "Updating..." : item.is_active && item.category.is_active ? "Active ●" : "Inactive ○"}
                       </button>
                     </td>
 
@@ -673,7 +721,7 @@ export default function MenuManagementView() {
                       <div className="flex items-center justify-end space-x-2">
                         {/* Move item sorting */}
                         <button
-                          disabled={idx === 0}
+                          disabled={idx === 0 || isActionPending("item-reorder")}
                           onClick={() => moveItemOrder(idx, "up", filteredItems)}
                           className="text-gray-400 hover:text-indigo-600 disabled:opacity-20 text-xs"
                           title="Move item up"
@@ -681,7 +729,7 @@ export default function MenuManagementView() {
                           ▲
                         </button>
                         <button
-                          disabled={idx === filteredItems.length - 1}
+                          disabled={idx === filteredItems.length - 1 || isActionPending("item-reorder")}
                           onClick={() => moveItemOrder(idx, "down", filteredItems)}
                           className="text-gray-400 hover:text-indigo-600 disabled:opacity-20 text-xs"
                           title="Move item down"
@@ -712,9 +760,10 @@ export default function MenuManagementView() {
 
                         <button
                           onClick={() => handleDeleteItem(item)}
+                          disabled={isActionPending(`item-delete-${item.id}`)}
                           className="text-red-600 hover:text-red-900 font-semibold text-xs px-1"
                         >
-                          Delete
+                          {isActionPending(`item-delete-${item.id}`) ? "Deleting..." : "Delete"}
                         </button>
                       </div>
                     </td>

@@ -5,7 +5,7 @@ import Link from "next/link"
 
 type OrderItem = {
   id: string
-  menu_item_id: string
+  menu_item_id: string | null
   item_name_snapshot: string
   unit_price_snapshot: number
   quantity: number
@@ -112,7 +112,7 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
   }
 
   async function handleAction(newStatus: string) {
-    if (!order) return
+    if (!order || updating) return
     setUpdating(true)
     try {
       await onStatusUpdate(order.id, newStatus, newStatus === "REJECTED" ? rejectReason : undefined)
@@ -244,6 +244,7 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
                   </button>
                   <button
                     onClick={() => handleAction("REJECTED")}
+                    disabled={updating}
                     className="px-3 py-1.5 bg-rose-600 text-white font-medium text-xs rounded-lg hover:bg-rose-700"
                   >
                     Confirm Reject

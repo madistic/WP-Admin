@@ -92,6 +92,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
   // Add Address Modal State
   const [showAddressModal, setShowAddressModal] = useState(false)
+  const [addingAddress, setAddingAddress] = useState(false)
   const [addressForm, setAddressForm] = useState({
     address_type: "Home",
     address_line: "",
@@ -126,6 +127,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
   async function handleAddAddress(e: React.FormEvent) {
     e.preventDefault()
+    if (addingAddress) return
+    setAddingAddress(true)
     try {
       const res = await fetch(`/api/customers/${customerId}/addresses`, {
         method: "POST",
@@ -143,10 +146,12 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           delivery_instructions: "",
           is_default: false,
         })
-        fetchCustomer360()
+        await fetchCustomer360()
       }
     } catch (err) {
       console.error(err)
+    } finally {
+      setAddingAddress(false)
     }
   }
 
@@ -162,7 +167,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       })
       if (res.ok) {
         setNewNoteText("")
-        fetchCustomer360()
+        await fetchCustomer360()
       }
     } catch (err) {
       console.error(err)
@@ -616,9 +621,10 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700"
+                  disabled={addingAddress}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-50"
                 >
-                  Save Address
+                  {addingAddress ? "Saving..." : "Save Address"}
                 </button>
               </div>
             </form>

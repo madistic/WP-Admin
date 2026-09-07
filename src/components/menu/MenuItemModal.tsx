@@ -14,12 +14,30 @@ interface AddonInput {
   is_available: boolean
 }
 
+interface EditableMenuItem {
+  id: string
+  category_id: string
+  name: string
+  description: string | null
+  price: number
+  image_url: string | null
+  is_available: boolean
+  is_active: boolean
+  is_veg: boolean
+  prep_time_minutes: number | null
+  is_today_special: boolean
+  special_until_date: string | null
+  is_bestseller: boolean
+  variants: Array<{ name: string; price: number; is_available: boolean }>
+  addons: Array<{ name: string; price: number; is_available: boolean }>
+}
+
 interface MenuItemModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
   categories: Array<{ id: string; name: string }>
-  itemToEdit?: any | null
+  itemToEdit?: EditableMenuItem | null
 }
 
 export default function MenuItemModal({
@@ -45,11 +63,11 @@ export default function MenuItemModal({
   const [isBestseller, setIsBestseller] = useState(itemToEdit?.is_bestseller ?? false)
 
   const [variants, setVariants] = useState<VariantInput[]>(
-    itemToEdit?.variants?.map((v: any) => ({ name: v.name, price: String(v.price), is_available: v.is_available })) || []
+    itemToEdit?.variants?.map((v) => ({ name: v.name, price: String(v.price), is_available: v.is_available })) || []
   )
 
   const [addons, setAddons] = useState<AddonInput[]>(
-    itemToEdit?.addons?.map((a: any) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || []
+    itemToEdit?.addons?.map((a) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || []
   )
 
   const [loading, setLoading] = useState(false)
@@ -70,8 +88,8 @@ export default function MenuItemModal({
       setIsTodaySpecial(itemToEdit?.is_today_special ?? false)
       setSpecialUntilDate(itemToEdit?.special_until_date ? new Date(itemToEdit.special_until_date).toISOString().split("T")[0] : "")
       setIsBestseller(itemToEdit?.is_bestseller ?? false)
-      setVariants(itemToEdit?.variants?.map((v: any) => ({ name: v.name, price: String(v.price), is_available: v.is_available })) || [])
-      setAddons(itemToEdit?.addons?.map((a: any) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || [])
+      setVariants(itemToEdit?.variants?.map((v) => ({ name: v.name, price: String(v.price), is_available: v.is_available })) || [])
+      setAddons(itemToEdit?.addons?.map((a) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || [])
       setError(null)
     }
   }, [itemToEdit, isOpen, categories])

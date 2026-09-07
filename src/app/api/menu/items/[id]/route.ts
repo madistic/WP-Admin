@@ -83,7 +83,7 @@ export async function DELETE(
 
     const existing = await prisma.menuItem.findFirst({
       where: { id: itemId, restaurant_id: restaurantId },
-      include: { restaurant: true },
+      include: { restaurant: true, variants: true },
     })
 
     if (!existing) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
@@ -119,6 +119,24 @@ export async function DELETE(
       console.log(
         `[Meta Catalog Delete] Product '${existing.name}' (retailer_id: ${retailerId}) removed from Meta. Proceeding to delete DB record.`
       )
+
+      for (const variant of existing.variants) {
+        const variantRetailerId = `${retailerId}__var__${variant.id}`
+        const variantDeleteResult = await deleteProductFromMetaCatalog(
+          catalogId,
+          variantRetailerId,
+          `${existing.name} [${variant.name}]`
+        )
+
+        if (!variantDeleteResult.success) {
+          return NextResponse.json(
+            {
+              error: `Failed to remove variant '${variant.name}' from Meta Catalogue: ${variantDeleteResult.error}. The menu item has been preserved — please retry deletion.`,
+            },
+            { status: 502 }
+          )
+        }
+      }
     } else {
       // No Meta product was ever synced — skip Meta deletion entirely
       console.log(
@@ -127,8 +145,9 @@ export async function DELETE(
     }
 
     // Step 2: Only delete DB record after Meta deletion confirmed (or item was never synced)
-    await prisma.menuItem.delete({
-      where: { id: itemId },
+    await prisma.$transaction(async (tx) => {
+      await tx.categoryItemSelection.deleteMany({ where: { menu_item_id: itemId } })
+      await tx.menuItem.delete({ where: { id: itemId } })
     })
 
     return NextResponse.json({ success: true })

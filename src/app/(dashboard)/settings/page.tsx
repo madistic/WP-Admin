@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [updatingStoreStatus, setUpdatingStoreStatus] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
   useEffect(() => {
@@ -38,8 +39,8 @@ export default function SettingsPage() {
   }
 
   async function updateStoreStatus(isOpen: boolean) {
-    if (!restaurant) return
-    setSaving(true)
+    if (!restaurant || updatingStoreStatus) return
+    setUpdatingStoreStatus(true)
     try {
       const res = await fetch("/api/restaurant", {
         method: "PATCH",
@@ -53,7 +54,7 @@ export default function SettingsPage() {
     } catch (err) {
       console.error(err)
     } finally {
-      setSaving(false)
+      setUpdatingStoreStatus(false)
     }
   }
 
@@ -122,7 +123,7 @@ export default function SettingsPage() {
 
           <button
             type="button"
-            disabled={saving}
+            disabled={updatingStoreStatus}
             onClick={() => updateStoreStatus(!restaurant?.is_open)}
             className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors shadow-xs ${
               restaurant?.is_open

@@ -11,6 +11,16 @@ interface BulkImportModalProps {
   categories: Array<{ id: string; name: string }>
 }
 
+interface ImportResponse {
+  message?: string
+  error?: string
+  errors?: string[]
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Failed to import items"
+}
+
 export default function BulkImportModal({ isOpen, onClose, onSuccess, categories }: BulkImportModalProps) {
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
@@ -88,24 +98,30 @@ export default function BulkImportModal({ isOpen, onClose, onSuccess, categories
         body: formData,
       })
 
-      const data = await res.json()
+      let data: ImportResponse
+      const isJson = res.headers.get("content-type")?.includes("application/json")
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to import items")
+      if (isJson) {
+        data = await res.json() as ImportResponse
+      } else {
+        const text = await res.text()
+        throw new Error(`Server Error (${res.status}): ${text.substring(0, 100)}`)
       }
 
-      setSuccess(data.message)
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to import items")
+      }
+
+      setSuccess(data.message || "Import completed")
       if (data.errors && data.errors.length > 0) {
         setError(`Some items failed to import:\n${data.errors.join("\n")}`)
       } else {
         toast.success("Successfully imported all items!")
-        setTimeout(() => {
-          onSuccess()
-          onClose()
-        }, 2000)
+        onSuccess()
+        onClose()
       }
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(errorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -116,7 +132,7 @@ export default function BulkImportModal({ isOpen, onClose, onSuccess, categories
       <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
         <div className="flex justify-between items-center border-b pb-3">
           <h2 className="text-lg font-bold text-gray-900">Bulk Import Menu</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold">✕</button>
+          <button disabled={loading} onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold disabled:opacity-50">✕</button>
         </div>
 
         <div className="space-y-4 text-sm text-gray-600">
@@ -126,6 +142,7 @@ export default function BulkImportModal({ isOpen, onClose, onSuccess, categories
             <p className="mb-2 font-medium text-indigo-900">Step 1: Download Template</p>
             <button 
               onClick={handleDownloadTemplate}
+              disabled={loading}
               className="px-4 py-2 bg-white border border-indigo-200 text-indigo-600 rounded-md font-medium hover:bg-indigo-50 transition-colors shadow-sm text-xs"
             >
               📥 Download Excel Template
@@ -138,6 +155,7 @@ export default function BulkImportModal({ isOpen, onClose, onSuccess, categories
               type="file" 
               accept=".xlsx, .xls"
               onChange={(e) => setFile(e.target.files ? e.target.files[0] : null)}
+              disabled={loading}
               className="block w-full text-sm text-slate-500
                 file:mr-4 file:py-2 file:px-4
                 file:rounded-md file:border-0
@@ -163,7 +181,8 @@ export default function BulkImportModal({ isOpen, onClose, onSuccess, categories
         <div className="flex justify-end space-x-3 pt-4 border-t mt-4">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+            disabled={loading}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
           >
             Cancel
           </button>

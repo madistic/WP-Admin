@@ -34,6 +34,7 @@ type Order = {
 export default function OrderBoard() {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null)
 
   // Filtering & Sorting State
   const [activeTab, setActiveTab] = useState("ALL")
@@ -72,6 +73,8 @@ export default function OrderBoard() {
   }, [])
 
   const updateStatus = async (orderId: string, newStatus: string, reason?: string) => {
+    if (updatingOrderId) return
+    setUpdatingOrderId(orderId)
     try {
       const res = await fetch(`/api/orders/${orderId}/status`, {
         method: "PATCH",
@@ -86,6 +89,8 @@ export default function OrderBoard() {
       }
     } catch (e) {
       console.error("Status update error", e)
+    } finally {
+      setUpdatingOrderId(null)
     }
   }
 
@@ -442,27 +447,30 @@ export default function OrderBoard() {
                       {order.status === "NEW" && (
                         <button
                           onClick={() => updateStatus(order.id, "IN_PROCESS")}
-                          className="px-3 py-1 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 transition-colors shadow-xs"
+                          disabled={updatingOrderId !== null}
+                          className="px-3 py-1 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 transition-colors shadow-xs disabled:opacity-50"
                         >
-                          Accept
+                          {updatingOrderId === order.id ? "Updating..." : "Accept"}
                         </button>
                       )}
 
                       {order.status === "IN_PROCESS" && (
                         <button
                           onClick={() => updateStatus(order.id, "OUT_FOR_DELIVERY")}
-                          className="px-3 py-1 bg-blue-600 text-white font-medium text-xs rounded-lg hover:bg-blue-700 transition-colors shadow-xs"
+                          disabled={updatingOrderId !== null}
+                          className="px-3 py-1 bg-blue-600 text-white font-medium text-xs rounded-lg hover:bg-blue-700 transition-colors shadow-xs disabled:opacity-50"
                         >
-                          Dispatch
+                          {updatingOrderId === order.id ? "Updating..." : "Dispatch"}
                         </button>
                       )}
 
                       {order.status === "OUT_FOR_DELIVERY" && (
                         <button
                           onClick={() => updateStatus(order.id, "DELIVERED")}
-                          className="px-3 py-1 bg-emerald-600 text-white font-medium text-xs rounded-lg hover:bg-emerald-700 transition-colors shadow-xs"
+                          disabled={updatingOrderId !== null}
+                          className="px-3 py-1 bg-emerald-600 text-white font-medium text-xs rounded-lg hover:bg-emerald-700 transition-colors shadow-xs disabled:opacity-50"
                         >
-                          Deliver
+                          {updatingOrderId === order.id ? "Updating..." : "Deliver"}
                         </button>
                       )}
 

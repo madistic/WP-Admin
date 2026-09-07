@@ -5,6 +5,14 @@ import prisma from "@/lib/prisma"
 import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
 import ExcelJS from "exceljs"
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unknown error"
+}
+
+function cellText(value: ExcelJS.CellValue | undefined) {
+  return value === null || value === undefined ? "" : String(value).trim()
+}
+
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -30,7 +38,7 @@ export async function POST(request: Request) {
     const rows = worksheet.getRows(2, worksheet.rowCount - 1) || []
     let successCount = 0
     let errorCount = 0
-    let errors: string[] = []
+    const errors: string[] = []
 
     // Cache categories to avoid repeated DB calls
     const categoriesCache = new Map<string, string>()
@@ -43,18 +51,15 @@ export async function POST(request: Request) {
 
     let sortOrder = await prisma.menuItem.count({ where: { restaurant_id: restaurantId } })
 
+    let categorySortOrder = existingCats.length
     for (const row of rows) {
-      // row.values is 1-indexed array
-      const rowValues = row.values as any[]
-      if (!rowValues || rowValues.length < 3) continue // Skip empty rows
-
-      const catName = rowValues[1]?.toString().trim()
-      const name = rowValues[2]?.toString().trim()
-      const description = rowValues[3]?.toString().trim() || ""
-      const priceStr = rowValues[4]?.toString().trim()
-      const imageUrl = rowValues[5]?.toString().trim() || null
-      const isVegStr = rowValues[6]?.toString().trim().toLowerCase()
-      const prepTimeStr = rowValues[7]?.toString().trim()
+      const catName = cellText(row.getCell(1).value)
+      const name = cellText(row.getCell(2).value)
+      const description = cellText(row.getCell(3).value)
+      const priceStr = cellText(row.getCell(4).value)
+      const imageUrl = cellText(row.getCell(5).value) || null
+      const isVegStr = cellText(row.getCell(6).value).toLowerCase()
+      const prepTimeStr = cellText(row.getCell(7).value)
 
       if (!catName || !name || !priceStr) {
         if (catName || name || priceStr) { // If it's a partially filled row
@@ -77,12 +82,11 @@ export async function POST(request: Request) {
       // Get or create category
       let categoryId = categoriesCache.get(catName.toLowerCase())
       if (!categoryId) {
-        const catCount = await prisma.menuCategory.count({ where: { restaurant_id: restaurantId } })
         const newCat = await prisma.menuCategory.create({
           data: {
             restaurant_id: restaurantId,
             name: catName,
-            sort_order: catCount,
+            sort_order: categorySortOrder++,
           }
         })
         categoryId = newCat.id
@@ -113,9 +117,9 @@ export async function POST(request: Request) {
         }
         
         successCount++
-      } catch (err: any) {
+      } catch (err: unknown) {
         errorCount++
-        errors.push(`Row ${row.number}: Failed to create item '${name}' - ${err.message}`)
+        errors.push(`Row ${row.number}: Failed to create item '${name}' - ${errorMessage(err)}`)
       }
     }
 
@@ -125,7 +129,7 @@ export async function POST(request: Request) {
       errors
     }, { status: 200 })
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Bulk Import Error:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }

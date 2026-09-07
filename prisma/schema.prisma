@@ -255,7 +255,7 @@ enum OrderSource {
 model OrderItem {
   id                  String   @id @default(uuid())
   order_id            String
-  menu_item_id        String
+  menu_item_id        String?
   item_name_snapshot  String
   unit_price_snapshot Float
   quantity            Int
@@ -264,7 +264,7 @@ model OrderItem {
   created_at          DateTime @default(now())
 
   order    Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
-  menuItem MenuItem @relation(fields: [menu_item_id], references: [id], onDelete: Restrict)
+  menuItem MenuItem? @relation(fields: [menu_item_id], references: [id], onDelete: SetNull)
 }
 
 model OrderStatusHistory {
@@ -327,4 +327,3 @@ model WhatsAppCartItem {
   cart                  WhatsAppCart  @relation(fields: [cart_id], references: [id], onDelete: Cascade)
   menuItem              MenuItem      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
 }
-

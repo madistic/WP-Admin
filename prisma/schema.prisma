@@ -287,6 +287,8 @@ model WhatsAppCart {
   checkout_step            String?            // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION", etc.
   customer_name            String?
   delivery_address         String?
+  processing_message_id    String?
+  processing_started_at    DateTime?
   created_at               DateTime           @default(now())
   updated_at               DateTime           @updatedAt
 
@@ -294,6 +296,15 @@ model WhatsAppCart {
   selections               CategoryItemSelection[]
 
   @@unique([restaurant_id, customer_whatsapp_number])
+}
+
+model WhatsAppMessageReceipt {
+  message_id   String   @id
+  restaurant_id String
+  sender       String
+  status       String   @default("PROCESSING")
+  created_at   DateTime @default(now())
+  completed_at DateTime?
 }
 
 model CategoryItemSelection {

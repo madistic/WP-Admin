@@ -27,8 +27,11 @@ import {
   updateCategorySelectionQuantity,
   commitSelectionsToCart,
   clearCategorySelections,
+  claimWhatsAppInteraction,
+  releaseWhatsAppInteraction,
 } from "./cart"
 import prisma from "@/lib/prisma"
+import { Prisma } from "@prisma/client"
 
 export interface IncomingWhatsAppMessageData {
   id: string
@@ -68,6 +71,58 @@ export interface ResolvedRestaurantInfo {
  * Main Entry Point for handling incoming WhatsApp events for a resolved restaurant tenant.
  */
 export async function processIncomingWhatsAppMessage(
+  restaurant: ResolvedRestaurantInfo,
+  message: IncomingWhatsAppMessageData
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  if (message.type !== "interactive" || !message.interactiveId) {
+    return await processIncomingWhatsAppMessageUnlocked(restaurant, message)
+  }
+
+  let receiptClaimed = false
+  try {
+    await prisma.whatsAppMessageReceipt.create({
+      data: {
+        message_id: message.id,
+        restaurant_id: restaurant.id,
+        sender: message.from,
+      },
+    })
+    receiptClaimed = true
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return {
+        handled: true,
+        responseText: "This action is already being processed.",
+        intent: "duplicate_interactive_message",
+      }
+    }
+    throw error
+  }
+
+  const cart = await getCartDetails(restaurant.id, message.from)
+  const claimed = await claimWhatsAppInteraction(restaurant.id, message.from, message.id)
+  if (!claimed) {
+    return {
+      handled: true,
+      responseText: "This action is already being processed.",
+      intent: "interactive_action_locked",
+    }
+  }
+
+  try {
+    return await processIncomingWhatsAppMessageUnlocked(restaurant, message)
+  } finally {
+    if (cart) {
+      await releaseWhatsAppInteraction(cart.id, message.id)
+    }
+    await prisma.whatsAppMessageReceipt.update({
+      where: { message_id: message.id },
+      data: { status: "COMPLETED", completed_at: new Date() },
+    })
+  }
+}
+
+async function processIncomingWhatsAppMessageUnlocked(
   restaurant: ResolvedRestaurantInfo,
   message: IncomingWhatsAppMessageData
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {

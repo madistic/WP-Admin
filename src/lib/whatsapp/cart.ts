@@ -37,6 +37,41 @@ export interface FormattedCartSummary {
   delivery_address?: string
 }
 
+const INTERACTION_LOCK_TIMEOUT_MS = 5 * 60 * 1000
+
+export async function claimWhatsAppInteraction(
+  restaurantId: string,
+  customerWhatsappNumber: string,
+  messageId: string
+): Promise<boolean> {
+  const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
+  const staleBefore = new Date(Date.now() - INTERACTION_LOCK_TIMEOUT_MS)
+  const result = await prisma.whatsAppCart.updateMany({
+    where: {
+      id: cart.id,
+      OR: [
+        { processing_message_id: null },
+        { processing_started_at: { lt: staleBefore } },
+      ],
+    },
+    data: {
+      processing_message_id: messageId,
+      processing_started_at: new Date(),
+    },
+  })
+  return result.count === 1
+}
+
+export async function releaseWhatsAppInteraction(cartId: string, messageId: string): Promise<void> {
+  await prisma.whatsAppCart.updateMany({
+    where: { id: cartId, processing_message_id: messageId },
+    data: {
+      processing_message_id: null,
+      processing_started_at: null,
+    },
+  })
+}
+
 /**
  * Gets or creates a WhatsApp Cart for a specific restaurant and customer phone number.
  */

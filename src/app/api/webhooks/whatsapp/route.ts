@@ -113,8 +113,10 @@ export async function POST(request: Request) {
 
           let interactiveId: string | undefined = undefined
           let interactiveTitle: string | undefined = undefined
+          let interactiveMessageId: string | undefined = undefined
           if (messageType === "interactive") {
             const interactive = message?.interactive
+            interactiveMessageId = message?.context?.id || messageId
             if (interactive?.type === "list_reply") {
               interactiveId = interactive.list_reply?.id
               interactiveTitle = interactive.list_reply?.title
@@ -168,6 +170,7 @@ export async function POST(request: Request) {
           if (from) {
             await processIncomingWhatsAppMessage(restaurant, {
               id: messageId,
+              interactiveMessageId,
               from,
               type: messageType,
               textBody,

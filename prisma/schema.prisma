@@ -299,12 +299,13 @@ model WhatsAppCart {
 }
 
 model WhatsAppMessageReceipt {
-  message_id   String   @id
-  restaurant_id String
-  sender       String
-  status       String   @default("PROCESSING")
-  created_at   DateTime @default(now())
-  completed_at DateTime?
+  message_id             String   @id
+  interaction_message_id String   @unique
+  restaurant_id          String
+  sender                 String
+  status                 String   @default("PROCESSING")
+  created_at             DateTime @default(now())
+  completed_at           DateTime?
 }
 
 model CategoryItemSelection {

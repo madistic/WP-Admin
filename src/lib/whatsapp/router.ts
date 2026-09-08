@@ -35,6 +35,7 @@ import { Prisma } from "@prisma/client"
 
 export interface IncomingWhatsAppMessageData {
   id: string
+  interactiveMessageId?: string
   from: string
   type: string
   textBody?: string
@@ -78,16 +79,16 @@ export async function processIncomingWhatsAppMessage(
     return await processIncomingWhatsAppMessageUnlocked(restaurant, message)
   }
 
-  let receiptClaimed = false
+  const interactionMessageId = message.interactiveMessageId || message.id
   try {
     await prisma.whatsAppMessageReceipt.create({
       data: {
         message_id: message.id,
+        interaction_message_id: interactionMessageId,
         restaurant_id: restaurant.id,
         sender: message.from,
       },
     })
-    receiptClaimed = true
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return {
@@ -100,7 +101,7 @@ export async function processIncomingWhatsAppMessage(
   }
 
   const cart = await getCartDetails(restaurant.id, message.from)
-  const claimed = await claimWhatsAppInteraction(restaurant.id, message.from, message.id)
+  const claimed = await claimWhatsAppInteraction(restaurant.id, message.from, interactionMessageId)
   if (!claimed) {
     return {
       handled: true,
@@ -113,7 +114,7 @@ export async function processIncomingWhatsAppMessage(
     return await processIncomingWhatsAppMessageUnlocked(restaurant, message)
   } finally {
     if (cart) {
-      await releaseWhatsAppInteraction(cart.id, message.id)
+      await releaseWhatsAppInteraction(cart.id, interactionMessageId)
     }
     await prisma.whatsAppMessageReceipt.update({
       where: { message_id: message.id },

@@ -32,6 +32,7 @@ import {
 } from "./cart"
 import prisma from "@/lib/prisma"
 import { Prisma } from "@prisma/client"
+import { CUSTOMER_BRAND_NAME, CUSTOMER_BRAND_PROFILE } from "./branding"
 
 export interface IncomingWhatsAppMessageData {
   id: string
@@ -581,7 +582,7 @@ export async function handleInitialGreeting(
   })
 
   const greetingName = customer?.name || "there"
-  const responseText = `Hello ${greetingName} 👋\nWelcome to ${restaurant.name}! What would you like to order today?`
+  const responseText = `Hello ${greetingName} 👋\nWelcome to ${CUSTOMER_BRAND_PROFILE}\n\nWhat would you like to enjoy today?`
 
   if (!restaurant.whatsapp_phone_number_id) {
     return { handled: true, responseText, intent: "initial_greeting" }
@@ -754,14 +755,9 @@ export async function handleTrackOrderPrompt(
     const responseText = lines.join("\n")
 
     if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [{ id: "action_initial_greeting", title: "🍽️ View Menu" }]
-      )
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
     }
-    return { handled: true, responseText, intent: "track_multiple_orders" }
+    return await handleInitialGreeting(restaurant, sender)
   }
 
   // 0 active orders
@@ -791,19 +787,11 @@ export async function handleOrderTrackingQuery(
   })
 
   if (!order) {
-    const responseText = `❌ *Order Not Found*\n\nCould not find Order ID *"${orderIdInput}"* for your phone number at ${restaurant.name}.\n\nPlease check the ID and try again, or return to main menu.`
+    const responseText = `❌ *Order Not Found*\n\nCould not find Order ID *"${orderIdInput}"* for your phone number at ${CUSTOMER_BRAND_NAME}.\n\nPlease check the ID and try again, or return to the main menu.`
     if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [
-          { id: "action_track_order_prompt", title: "📦 Retry Order ID" },
-          { id: "action_initial_greeting", title: "🔙 Back to Main Menu" },
-        ]
-      )
+      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
     }
-    return { handled: true, responseText, intent: "track_order_not_found" }
+    return await handleInitialGreeting(restaurant, sender)
   }
 
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
@@ -829,18 +817,10 @@ export async function handleOrderTrackingQuery(
   const responseText = lines.join("\n")
 
   if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      [
-        { id: "action_initial_greeting", title: "🔙 Main Menu" },
-        { id: "action_view_cart", title: "🛒 View Cart" },
-      ]
-    )
+    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
   }
 
-  return { handled: true, responseText, intent: "track_order_success" }
+  return await handleInitialGreeting(restaurant, sender)
 }
 
 /**
@@ -856,7 +836,7 @@ export async function handleCategoriesList(
   const bodyText = `📂 *Menu Categories*\nSelect a category below to view items:`
 
   if (categories.length === 0) {
-    const fallbackText = `👋 Welcome to *${restaurant.name}*!\n\nOur menu is currently being updated. Please check back soon!`
+    const fallbackText = `👋 Welcome to *${CUSTOMER_BRAND_NAME}*!\n\nOur menu is being refreshed. Please check back soon! 🍽️`
     if (restaurant.whatsapp_phone_number_id) {
       await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, fallbackText)
     }
@@ -888,7 +868,7 @@ export async function handleCategoriesList(
         [{ title: "Categories", rows }]
       )
     } else {
-      const lines: string[] = [`📂 *Menu Categories* (${restaurant.name}):\n`]
+      const lines: string[] = [`📂 *${CUSTOMER_BRAND_NAME} Menu Categories*:\n`]
       categories.forEach((cat, idx) => {
         lines.push(`${idx + 1}. *${cat.title}* (${cat.item_count} items)`)
       })

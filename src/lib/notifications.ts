@@ -1,6 +1,7 @@
 import { Order } from "@prisma/client"
 import { sendWhatsAppTextMessage } from "./whatsapp/client"
 import prisma from "./prisma"
+import { CUSTOMER_BRAND_NAME, getCustomerReviewLink } from "./whatsapp/branding"
 
 export interface NotificationProvider {
   sendOrderAccepted(order: Order, customerPhone: string): Promise<void>
@@ -47,30 +48,32 @@ export class WhatsAppNotificationProvider implements NotificationProvider {
   async sendOrderAccepted(order: Order, customerPhone: string) {
     const phoneId = await this.getPhoneNumberId(order.restaurant_id)
     if (!phoneId) return
-    const restaurantName = await this.getRestaurantName(order.restaurant_id)
-    const text = `🎉 *Order Accepted!*\nYour order #${order.order_number} from *${restaurantName}* has been accepted by the restaurant. 👨‍🍳\n\nWe’ll keep you updated. 📦`
+    const text = `🎉 *Order Accepted!*\nYour order #${order.order_number} from *${CUSTOMER_BRAND_NAME}* has been accepted. 👨‍🍳\n\nWe’re preparing it with care. 📦`
     await sendWhatsAppTextMessage(phoneId, customerPhone, text)
   }
 
   async sendOrderOutForDelivery(order: Order, customerPhone: string) {
     const phoneId = await this.getPhoneNumberId(order.restaurant_id)
     if (!phoneId) return
-    const text = `🛵 *Out for Delivery!*\nYour order #${order.order_number} is on its way to you!`
+    const text = `🛵 *Out for Delivery!*\nYour order #${order.order_number} is on its way! Keep an eye out. 😊`
     await sendWhatsAppTextMessage(phoneId, customerPhone, text)
   }
 
   async sendOrderDelivered(order: Order, customerPhone: string) {
     const phoneId = await this.getPhoneNumberId(order.restaurant_id)
     if (!phoneId) return
-    const text = `✅ *Delivered!*\nYour order #${order.order_number} has been delivered. Enjoy your meal! 🍽️`
+    const reviewLink = getCustomerReviewLink()
+    const reviewMessage = reviewLink
+      ? `\n\n⭐ *${CUSTOMER_BRAND_NAME} Reviews*\nWe’d love to hear about your experience! ❤️\n👉 ${reviewLink}`
+      : ""
+    const text = `✅ *Delivered!*\nYour order #${order.order_number} from *${CUSTOMER_BRAND_NAME}* has arrived. Enjoy every bite! 🍽️${reviewMessage}`
     await sendWhatsAppTextMessage(phoneId, customerPhone, text)
   }
 
   async sendOrderRejected(order: Order, customerPhone: string, reason?: string) {
     const phoneId = await this.getPhoneNumberId(order.restaurant_id)
     if (!phoneId) return
-    const restaurantName = await this.getRestaurantName(order.restaurant_id)
-    const text = `❌ *Order Cancelled*\nUnfortunately, your order #${order.order_number} from *${restaurantName}* was cancelled.\n${reason ? `Reason: ${reason}` : "Please contact us for more details."}`
+    const text = `❌ *Order Cancelled*\nYour order #${order.order_number} from *${CUSTOMER_BRAND_NAME}* was cancelled.\n${reason ? `Reason: ${reason}` : "Please contact us if you need help."}`
     await sendWhatsAppTextMessage(phoneId, customerPhone, text)
   }
 }

@@ -92,6 +92,41 @@ export async function processIncomingWhatsAppMessage(
     })
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      if (message.interactiveId === "co_cancel") {
+        const receipt = await prisma.whatsAppMessageReceipt.findUnique({
+          where: { interaction_message_id: interactionMessageId },
+          select: { created_at: true },
+        })
+        const cleanPhone = message.from.startsWith("+") ? message.from : `+${message.from}`
+        const placedOrder = receipt
+          ? await prisma.order.findFirst({
+              where: {
+                restaurant_id: restaurant.id,
+                customer_phone_snapshot: cleanPhone,
+                source: "WHATSAPP",
+                created_at: { gte: receipt.created_at },
+              },
+              orderBy: { created_at: "desc" },
+              select: { order_number: true },
+            })
+          : null
+
+        if (placedOrder && restaurant.whatsapp_phone_number_id) {
+          const responseText = "Sorry, this order has already been placed and can’t be cancelled. 🙏"
+          await sendWhatsAppInteractiveButtons(
+            restaurant.whatsapp_phone_number_id,
+            message.from,
+            responseText,
+            [{ id: "action_track_order_prompt", title: "📦 Track Order" }]
+          )
+          return {
+            handled: true,
+            responseText,
+            intent: "order_already_placed_cancel_rejected",
+          }
+        }
+      }
+
       return {
         handled: true,
         responseText: "This action is already being processed.",

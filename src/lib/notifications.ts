@@ -55,6 +55,10 @@ export class WhatsAppNotificationProvider implements NotificationProvider {
   async sendOrderOutForDelivery(order: Order, customerPhone: string) {
     const phoneId = await this.getPhoneNumberId(order.restaurant_id)
     if (!phoneId) return
+    if (order.order_type === "TAKEAWAY") {
+      await sendWhatsAppTextMessage(phoneId, customerPhone, "🍽️ Your order is ready for pickup! 🎉\nYou can collect it now.")
+      return
+    }
     const text = `🛵 *Out for Delivery!*\nYour order #${order.order_number} is on its way! Keep an eye out. 😊`
     await sendWhatsAppTextMessage(phoneId, customerPhone, text)
   }

@@ -10,6 +10,7 @@ const navItems = [
   { name: "Menu", href: "/menu", icon: "🍽️" },
   { name: "Categories", href: "/categories", icon: "📁" },
   { name: "POS History", href: "/pos-history", icon: "🧾" },
+  { name: "Printer Settings", href: "/settings/printer", icon: "🖨️" },
   { name: "History", href: "/history", icon: "📜" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
 ]

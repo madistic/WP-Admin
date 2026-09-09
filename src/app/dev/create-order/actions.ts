@@ -15,14 +15,15 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
     if (!session?.user || session.user.restaurant_id !== payload.restaurant_id) return { error: "Unauthorized" }
     if (!payload.client_request_id || !payload.items?.length) return { error: "Add at least one menu item." }
     if (payload.order_type === OrderType.DINING && !payload.table_number?.trim()) return { error: "Enter a table number for dining orders." }
-    if (payload.order_type === OrderType.HOME_DELIVERY && (!payload.customer_name?.trim() || !payload.customer_phone?.trim() || !payload.address?.trim())) return { error: "Name, phone, and address are required for home delivery." }
+    if (!payload.customer_name?.trim() || !payload.customer_phone?.trim()) return { error: "Customer name and phone number are required." }
+    if (payload.order_type === OrderType.HOME_DELIVERY && !payload.address?.trim()) return { error: "Delivery address is required for home delivery." }
 
     const result = await prisma.$transaction(async (tx) => {
       const existing = await tx.order.findUnique({ where: { restaurant_id_client_request_id: { restaurant_id: payload.restaurant_id, client_request_id: payload.client_request_id } } })
       if (existing) return existing
       const restaurant = await tx.restaurant.findUnique({ where: { id: payload.restaurant_id } })
       if (!restaurant) throw new Error("Restaurant not found")
-      const phone = payload.customer_phone?.trim() ? normalizePhoneNumber(payload.customer_phone) : `POS-${payload.restaurant_id}-${payload.client_request_id}`
+      const phone = normalizePhoneNumber(payload.customer_phone!)
       const customer = await tx.customer.upsert({ where: { restaurant_id_phone: { restaurant_id: payload.restaurant_id, phone } }, update: payload.customer_name?.trim() ? { name: payload.customer_name.trim() } : {}, create: { restaurant_id: payload.restaurant_id, phone, name: payload.customer_name?.trim() || "Walk-in Customer" } })
 
       const orderItems = []

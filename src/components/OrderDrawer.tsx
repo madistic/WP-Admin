@@ -125,6 +125,21 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
     }
   }
 
+  async function printOrder() {
+    if (!order) return
+    const settingsResponse = await fetch("/api/restaurant")
+    const restaurant = await settingsResponse.json()
+    const settings = restaurant.printer_settings ? JSON.parse(restaurant.printer_settings) : {}
+    const paperWidth = settings.paperWidth || "79mm"
+    const typeLabel = order.order_type === "DINING" ? `🍽️ DINING${order.table_number ? ` · Table ${order.table_number}` : ""}` : order.order_type === "TAKEAWAY" ? "🥡 TAKEAWAY" : "🛵 HOME DELIVERY"
+    const itemRows = order.items.map((item) => `<div class="row"><span>${item.quantity} x ${item.item_name_snapshot}${item.description ? `<small>${item.description}</small>` : ""}</span><span>₹${item.line_total.toFixed(2)}</span></div>`).join("")
+    const details = [settings.showCustomer !== false ? `Customer: ${order.customer_name_snapshot}` : "", settings.showPhone !== false ? `Phone: ${order.customer_phone_snapshot}` : "", settings.showOrderType !== false ? typeLabel : "", settings.showAddress !== false ? `Address: ${order.delivery_address_snapshot}` : "", settings.showPayment !== false ? `Payment: ${order.payment_method} / ${order.payment_status}` : ""].filter(Boolean).map((line) => `<div>${line}</div>`).join("")
+    const printWindow = window.open("", "_blank", "width=420,height=700")
+    if (!printWindow) return
+    printWindow.document.write(`<html><head><title>${order.order_number}</title><style>@page{size:${paperWidth} auto;margin:0}body{width:${paperWidth};margin:0;padding:5mm;font:11px monospace;box-sizing:border-box}h1{text-align:center;font-size:16px;margin:0 0 4px}.center{text-align:center}.line{border-top:1px dashed #000;margin:7px 0}.row{display:flex;justify-content:space-between;gap:8px}.row span:first-child{max-width:70%}.row small{display:block;font-size:9px;white-space:normal}.total{font-weight:bold;font-size:13px}.footer{text-align:center;margin-top:14px;white-space:pre-wrap}</style></head><body><h1>${settings.companyName || restaurant.name || "Restaurant"}</h1><div class="center">${settings.address || restaurant.address || ""}</div><div class="center">${settings.phone || restaurant.phone || ""}</div>${settings.gstin ? `<div class="center">GSTIN: ${settings.gstin}</div>` : ""}${settings.fssai ? `<div class="center">FSSAI: ${settings.fssai}</div>` : ""}<div class="line"></div><div><b>Order: ${order.order_number}</b></div><div>${new Date(order.created_at).toLocaleString("en-IN")}</div>${details}<div class="line"></div>${itemRows}<div class="line"></div><div class="row"><span>Subtotal</span><span>₹${order.subtotal.toFixed(2)}</span></div><div class="row"><span>Charges</span><span>₹${order.delivery_fee.toFixed(2)}</span></div><div class="row total"><span>GRAND TOTAL</span><span>₹${order.total.toFixed(2)}</span></div><div class="footer">${settings.footer || "Thank you!"}</div><script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}</script></body></html>`)
+    printWindow.document.close()
+  }
+
   // Calculate customer LTV & orders count
   const customerTotalOrders = order?.customer?.orders?.length || 1
   const customerLTV = order?.customer?.orders?.reduce((acc, curr) => acc + curr.total, 0) || order?.total || 0
@@ -215,6 +230,7 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
                 >
                   📞 Call
                 </a>
+                <button onClick={printOrder} className="px-3 py-2 bg-slate-900 text-white font-medium text-xs rounded-lg hover:bg-slate-800">🖨️ Print Order</button>
                 <a
                   href={`https://wa.me/${order.customer_phone_snapshot.replace(/[^0-9]/g, "")}`}
                   target="_blank"

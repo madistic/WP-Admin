@@ -22,6 +22,7 @@ model Restaurant {
   delivery_radius Float    @default(0)
   minimum_order   Float    @default(0)
   delivery_fee    Float    @default(0)
+  printer_settings String?
   whatsapp_phone_number_id String?  @unique
   whatsapp_catalog_id      String?
   is_open                  Boolean  @default(true)

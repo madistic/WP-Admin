@@ -38,6 +38,7 @@ export async function PATCH(request: Request) {
         ...(body.delivery_fee !== undefined && { delivery_fee: parseFloat(body.delivery_fee) }),
         ...(body.description !== undefined && { description: body.description }),
         ...(body.logo_url !== undefined && { logo_url: body.logo_url }),
+        ...(body.printer_settings !== undefined && { printer_settings: JSON.stringify(body.printer_settings) }),
       },
     })
 

@@ -32,6 +32,7 @@ import {
 } from "./cart"
 import prisma from "@/lib/prisma"
 import { Prisma } from "@prisma/client"
+import { OrderType } from "@prisma/client"
 import { CUSTOMER_BRAND_NAME, CUSTOMER_BRAND_PROFILE } from "./branding"
 
 export interface IncomingWhatsAppMessageData {
@@ -217,6 +218,7 @@ async function processIncomingWhatsAppMessageUnlocked(
       cart.checkout_step === "AWAITING_BUILDING_NO" ||
       cart.checkout_step === "AWAITING_CONFIRMATION" ||
       cart.checkout_step === "AWAITING_ADDRESS_SAVE_DECISION" ||
+      cart.checkout_step === "AWAITING_ORDER_TYPE" ||
       cart.checkout_step === "AWAITING_ORDER_NOTE")
   ) {
     if (interactiveId === "co_cancel" || cleanText === "cancel") {
@@ -238,6 +240,17 @@ async function processIncomingWhatsAppMessageUnlocked(
       await clearCart(restaurant.id, sender)
       await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
       return await handleInitialGreeting(restaurant, sender)
+    }
+
+    if (cart.checkout_step === "AWAITING_ORDER_TYPE") {
+      if (interactiveId === "order_type_home_delivery") {
+        await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION", { orderType: OrderType.HOME_DELIVERY })
+        return await renderOrderConfirmation(restaurant, sender)
+      }
+      if (interactiveId === "order_type_takeaway") {
+        await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION", { orderType: OrderType.TAKEAWAY })
+        return await renderOrderConfirmation(restaurant, sender)
+      }
     }
     if (cart.checkout_step === "AWAITING_NAME_CHANGE") {
       if (rawText.length > 0) {
@@ -375,12 +388,10 @@ async function processIncomingWhatsAppMessageUnlocked(
             }
           })
         }
-        await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION")
-        return await renderOrderConfirmation(restaurant, sender)
+        return await promptForOrderType(restaurant, sender)
       }
       if (interactiveId === "addr_save_no" || cleanText === "no") {
-        await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION")
-        return await renderOrderConfirmation(restaurant, sender)
+        return await promptForOrderType(restaurant, sender)
       }
     }
   }
@@ -414,7 +425,7 @@ async function processIncomingWhatsAppMessageUnlocked(
       await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION", {
         deliveryAddress: selectedAddress.address_line,
       })
-      return await renderOrderConfirmation(restaurant, sender)
+      return await promptForOrderType(restaurant, sender)
     }
   }
 
@@ -856,6 +867,27 @@ export async function handleOrderTrackingQuery(
   }
 
   return await handleInitialGreeting(restaurant, sender)
+}
+
+async function promptForOrderType(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ORDER_TYPE")
+  const responseText = "How would you like to receive your order?"
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      [
+        { id: "order_type_home_delivery", title: "🛵 Home Delivery" },
+        { id: "order_type_takeaway", title: "🥡 Takeaway" },
+        { id: "co_cancel", title: "❌ Cancel Order" },
+      ]
+    )
+  }
+  return { handled: true, responseText, intent: "awaiting_order_type" }
 }
 
 /**
@@ -1603,6 +1635,7 @@ export async function renderOrderConfirmation(
   const lines: string[] = []
   lines.push(`🛒 *Confirm Your Order*\n`)
   lines.push(`👤 *Deliver To:* ${cart.customer_name || "Customer"}`)
+  lines.push(`📦 *Order Type:* ${cart.order_type === OrderType.TAKEAWAY ? "Takeaway" : "Home Delivery"}`)
   lines.push(`📍 *Address:* ${cart.delivery_address || "Provided Address"}\n`)
 
   lines.push(`*Items:*`)

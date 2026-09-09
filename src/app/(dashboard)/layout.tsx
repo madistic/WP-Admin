@@ -93,7 +93,7 @@ export default async function DashboardLayout({
               href="/dev/create-order"
               className="hidden sm:inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition-colors border border-slate-200"
             >
-              ⚡ Order Simulator
+              ⚡ Restaurant POS
             </Link>
 
             <SignOutButton />

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { Prisma } from "@prisma/client"
+import { OrderType, Prisma } from "@prisma/client"
 
 export async function GET(request: Request) {
   try {
@@ -13,6 +13,8 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const statusParam = searchParams.get("status")  // DELIVERED | REJECTED | CANCELLED | empty = all three
+    const orderType = searchParams.get("orderType")
+    const source = searchParams.get("source")
     const dateFrom = searchParams.get("dateFrom")   // ISO date string
     const dateTo = searchParams.get("dateTo")       // ISO date string
     const search = searchParams.get("search")?.trim()
@@ -24,6 +26,11 @@ export async function GET(request: Request) {
         ? { equals: statusParam as any }
         : { in: ["DELIVERED", "REJECTED", "CANCELLED"] },
     }
+
+    if (orderType && ["DINING", "TAKEAWAY", "HOME_DELIVERY"].includes(orderType)) {
+      where.order_type = orderType as OrderType
+    }
+    if (source === "POS" || source === "WHATSAPP") where.source = source
 
     if (dateFrom || dateTo) {
       where.created_at = {

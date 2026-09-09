@@ -1,5 +1,5 @@
 import prisma from "@/lib/prisma"
-import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus } from "@prisma/client"
+import { OrderSource, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from "@prisma/client"
 
 export interface CartItemAddOptions {
   variantId?: string
@@ -33,6 +33,7 @@ export interface FormattedCartSummary {
   total: number
   item_count: number
   checkout_step: string
+  order_type?: OrderType
   customer_name?: string
   delivery_address?: string
 }
@@ -163,7 +164,7 @@ export async function getCartDetails(
   })
 
   const subtotal = formattedItems.reduce((sum, item) => sum + item.line_total, 0)
-  const deliveryFee = restaurant?.delivery_fee || 0
+  const deliveryFee = cart.order_type === OrderType.TAKEAWAY ? 0 : restaurant?.delivery_fee || 0
   const total = subtotal > 0 ? subtotal + deliveryFee : 0
   const itemCount = formattedItems.reduce((sum, item) => sum + item.quantity, 0)
 
@@ -178,6 +179,7 @@ export async function getCartDetails(
     total,
     item_count: itemCount,
     checkout_step: cart.checkout_step || "IDLE",
+    order_type: cart.order_type || undefined,
     customer_name: cart.customer_name || undefined,
     delivery_address: cart.delivery_address || undefined,
   }
@@ -378,7 +380,7 @@ export async function updateCartCheckoutStep(
   restaurantId: string,
   customerWhatsappNumber: string,
   step: string | null,
-  data?: { customerName?: string; deliveryAddress?: string }
+  data?: { customerName?: string; deliveryAddress?: string; orderType?: OrderType | null }
 ) {
   const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
   const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
@@ -389,6 +391,7 @@ export async function updateCartCheckoutStep(
       checkout_step: step || "IDLE",
       customer_name: data?.customerName !== undefined ? data.customerName : cart.customer_name,
       delivery_address: data?.deliveryAddress !== undefined ? data.deliveryAddress : cart.delivery_address,
+      order_type: data?.orderType !== undefined ? data.orderType : cart.order_type,
     },
   })
 }
@@ -424,6 +427,7 @@ export async function clearCart(restaurantId: string, customerWhatsappNumber: st
       checkout_step: "IDLE",
       customer_name: null,
       delivery_address: null,
+      order_type: null,
     },
   })
 
@@ -728,7 +732,8 @@ export async function createOrderFromCart(
     })
   }
 
-  const deliveryFee = restaurant.delivery_fee || 0
+  const orderType = cart.order_type || OrderType.HOME_DELIVERY
+  const deliveryFee = orderType === OrderType.TAKEAWAY ? 0 : restaurant.delivery_fee || 0
   const finalTotal = recalculatedSubtotal + deliveryFee
 
   // 4. Reuse or Create Customer record for (restaurant_id, phone)
@@ -775,7 +780,8 @@ export async function createOrderFromCart(
         customer_id: customer.id,
         customer_name_snapshot: checkoutData.customerName || customer.name,
         customer_phone_snapshot: cleanPhone,
-        delivery_address_snapshot: checkoutData.deliveryAddress,
+        delivery_address_snapshot: orderType === OrderType.TAKEAWAY ? "Takeaway" : checkoutData.deliveryAddress,
+        order_type: orderType,
         subtotal: recalculatedSubtotal,
         delivery_fee: deliveryFee,
         total: finalTotal,

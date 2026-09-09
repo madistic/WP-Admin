@@ -1,0 +1,7 @@
+CREATE TYPE "OrderType" AS ENUM ('HOME_DELIVERY', 'TAKEAWAY');
+
+ALTER TABLE "Order"
+ADD COLUMN "order_type" "OrderType" NOT NULL DEFAULT 'HOME_DELIVERY';
+
+ALTER TABLE "WhatsAppCart"
+ADD COLUMN "order_type" "OrderType";

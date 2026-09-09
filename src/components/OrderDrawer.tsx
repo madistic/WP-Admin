@@ -38,6 +38,8 @@ type Order = {
   customer_name_snapshot: string
   customer_phone_snapshot: string
   delivery_address_snapshot: string
+  order_type: "HOME_DELIVERY" | "TAKEAWAY" | "DINING"
+  table_number?: string | null
   subtotal: number
   delivery_fee: number
   total: number
@@ -280,6 +282,7 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
               {/* Address Box */}
               <div className="bg-white border border-slate-200 p-4 rounded-xl space-y-2 shadow-xs">
                 <h3 className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Delivery Address</h3>
+                <p className="text-xs font-semibold text-indigo-700">{order.order_type === "DINING" ? `🍽️ Dining${order.table_number ? ` · Table ${order.table_number}` : ""}` : order.order_type === "TAKEAWAY" ? "🥡 Takeaway" : "🛵 Home Delivery"}</p>
                 <p className="text-xs font-normal text-slate-900 bg-slate-50 p-2.5 rounded-lg border border-slate-200 leading-relaxed">
                   📍 {order.delivery_address_snapshot}
                 </p>

@@ -8,6 +8,11 @@ export const dynamic = "force-dynamic"
 export default async function DevCreateOrderPage() {
   const restaurants = await prisma.restaurant.findMany({
     include: {
+      categories: {
+        where: { is_active: true },
+        orderBy: { sort_order: "asc" },
+        select: { id: true, name: true },
+      },
       items: {
         where: {
           is_available: true,
@@ -16,6 +21,7 @@ export default async function DevCreateOrderPage() {
             is_active: true,
           },
         },
+        include: { variants: true, addons: true },
       },
     },
   })

@@ -208,6 +208,9 @@ model Order {
   customer_name_snapshot    String
   customer_phone_snapshot   String
   delivery_address_snapshot String
+  order_type                OrderType     @default(HOME_DELIVERY)
+  table_number              String?
+  client_request_id         String?
   subtotal                  Float
   delivery_fee              Float
   total                     Float
@@ -226,6 +229,8 @@ model Order {
   customer   Customer             @relation(fields: [customer_id], references: [id], onDelete: Restrict)
   items      OrderItem[]
   history    OrderStatusHistory[]
+
+  @@unique([restaurant_id, client_request_id])
 }
 
 enum PaymentMethod {
@@ -235,6 +240,12 @@ enum PaymentMethod {
 enum PaymentStatus {
   PENDING
   PAID
+}
+
+enum OrderType {
+  HOME_DELIVERY
+  TAKEAWAY
+  DINING
 }
 
 enum OrderStatus {
@@ -248,6 +259,7 @@ enum OrderStatus {
 
 enum OrderSource {
   DEV_CRUD
+  POS
   WHATSAPP
   WEBSITE
   PHONE
@@ -287,6 +299,7 @@ model WhatsAppCart {
   checkout_step            String?            // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION", etc.
   customer_name            String?
   delivery_address         String?
+  order_type               OrderType?
   processing_message_id    String?
   processing_started_at    DateTime?
   created_at               DateTime           @default(now())

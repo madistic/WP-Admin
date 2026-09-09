@@ -19,6 +19,7 @@ type Order = {
   customer_name_snapshot: string
   customer_phone_snapshot: string
   delivery_address_snapshot: string
+  order_type: "DINING" | "TAKEAWAY" | "HOME_DELIVERY"
   subtotal: number
   delivery_fee: number
   total: number
@@ -409,6 +410,8 @@ export default function OrderBoard() {
                   >
                     <td className="py-3.5 px-4">
                       <p className="font-semibold text-slate-900 text-sm">{order.order_number}</p>
+                      <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">{order.order_type === "DINING" ? "🍽️ DINING" : order.order_type === "TAKEAWAY" ? "🥡 TAKEAWAY" : "🛵 HOME DELIVERY"}</span>
+                      {order.source === "WHATSAPP" && <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">📱 WHATSAPP</span>}
                       <p className="text-[11px] text-slate-500 mt-0.5">
                         {new Date(order.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                       </p>

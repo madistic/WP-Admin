@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { usePathname } from "next/navigation"
 import StatusBadge from "@/components/StatusBadge"
 
 interface HistoryEvent {
@@ -25,6 +26,8 @@ interface PastOrder {
   customer_name_snapshot: string
   customer_phone_snapshot: string
   delivery_address_snapshot: string
+  order_type: "HOME_DELIVERY" | "TAKEAWAY" | "DINING"
+  source: string
   total: number
   status: string
   created_at: string
@@ -40,6 +43,8 @@ const STATUS_OPTIONS = [
 ]
 
 export default function HistoryPage() {
+  const pathname = usePathname()
+  const posOnly = pathname === "/pos-history"
   const [orders, setOrders] = useState<PastOrder[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedOrder, setSelectedOrder] = useState<PastOrder | null>(null)
@@ -49,6 +54,7 @@ export default function HistoryPage() {
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
   const [search, setSearch] = useState("")
+  const [orderType, setOrderType] = useState("")
 
   const fetchHistory = useCallback(async () => {
     setLoading(true)
@@ -58,6 +64,8 @@ export default function HistoryPage() {
       if (dateFrom) params.set("dateFrom", dateFrom)
       if (dateTo) params.set("dateTo", dateTo)
       if (search.trim()) params.set("search", search.trim())
+      if (orderType) params.set("orderType", orderType)
+      if (posOnly) params.set("source", "POS")
 
       const res = await fetch(`/api/orders/history?${params.toString()}`)
       if (res.ok) {
@@ -70,7 +78,7 @@ export default function HistoryPage() {
     } finally {
       setLoading(false)
     }
-  }, [status, dateFrom, dateTo, search])
+  }, [status, dateFrom, dateTo, search, orderType, posOnly])
 
   useEffect(() => {
     fetchHistory()
@@ -79,7 +87,7 @@ export default function HistoryPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-5 pb-12">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">Order Audit Log & History</h1>
+        <h1 className="text-2xl font-semibold text-slate-900 tracking-tight">{posOnly ? "POS & Dining Order History" : "Order Audit Log & History"}</h1>
         <p className="text-slate-500 text-xs font-normal mt-0.5">
           Archived timeline of all delivered, cancelled, and rejected restaurant orders.
         </p>
@@ -88,6 +96,16 @@ export default function HistoryPage() {
       {/* Filter Bar */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-4 flex flex-wrap gap-3 items-end">
         {/* Status */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Order Type</label>
+          <select value={orderType} onChange={(e) => setOrderType(e.target.value)} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 bg-white">
+            <option value="">All Types</option>
+            <option value="DINING">🍽️ Dining</option>
+            <option value="TAKEAWAY">🥡 Takeaway</option>
+            <option value="HOME_DELIVERY">🛵 Home Delivery</option>
+          </select>
+        </div>
+
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Status</label>
           <select
@@ -137,7 +155,7 @@ export default function HistoryPage() {
         </div>
 
         <button
-          onClick={() => { setStatus(""); setDateFrom(""); setDateTo(""); setSearch("") }}
+          onClick={() => { setStatus(""); setOrderType(""); setDateFrom(""); setDateTo(""); setSearch("") }}
           className="text-xs font-medium text-slate-500 hover:text-slate-700 px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
         >
           Clear
@@ -168,6 +186,7 @@ export default function HistoryPage() {
                           <StatusBadge status={o.status} />
                         </div>
                         <p className="text-xs text-slate-700 font-medium mt-1">{o.customer_name_snapshot}</p>
+                        <p className="text-[11px] text-indigo-600">{o.order_type === "DINING" ? "🍽️ Dining" : o.order_type === "TAKEAWAY" ? "🥡 Takeaway" : "🛵 Home Delivery"} {o.source === "WHATSAPP" && "· 📱 WhatsApp"}</p>
                         <p className="text-[11px] text-slate-400 font-mono">{o.customer_phone_snapshot}</p>
                       </div>
                       <div className="text-right">
@@ -202,6 +221,11 @@ export default function HistoryPage() {
                 <p className="text-slate-700 mt-0.5">
                   {selectedOrder.items.map((i) => `${i.quantity}x ${i.item_name_snapshot}`).join(", ")}
                 </p>
+              </div>
+
+              <div>
+                <span className="text-slate-400 text-[11px] block">Order Type</span>
+                <span className="font-semibold text-slate-900">{selectedOrder.order_type === "DINING" ? "🍽️ Dining" : selectedOrder.order_type === "TAKEAWAY" ? "🥡 Takeaway" : "🛵 Home Delivery"} {selectedOrder.source === "WHATSAPP" && "· 📱 WhatsApp"}</span>
               </div>
 
               <div className="border-t border-slate-100 pt-3">

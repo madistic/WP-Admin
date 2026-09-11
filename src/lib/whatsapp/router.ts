@@ -441,7 +441,7 @@ async function processIncomingWhatsAppMessageUnlocked(
       const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
       if (selectedAddress.latitude && selectedAddress.longitude) {
         const branches = await getActiveBranchesWithLocations(restaurant.id)
-        const nearest = selectNearestEligibleBranch(selectedAddress.latitude, selectedAddress.longitude, branches)
+        const nearest = await selectNearestEligibleBranch(selectedAddress.latitude, selectedAddress.longitude, branches)
         if (!nearest) {
           const errText = "❌ Sorry, delivery to your saved address is not available right now. Please choose a different address."
           if (restaurant.whatsapp_phone_number_id) {

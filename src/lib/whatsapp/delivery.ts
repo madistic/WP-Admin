@@ -35,28 +35,42 @@ export interface DeliveryQuoteResult {
 }
 
 // ─────────────────────────────────────────────
-// Haversine Distance (straight-line in KM)
+// Exact Road Distance (via configurable API)
 // ─────────────────────────────────────────────
-export function calculateDistanceKm(
+export async function getRoadDistanceKm(
   latitude1: number,
   longitude1: number,
   latitude2: number,
   longitude2: number
-): number {
-  const earthRadiusKm = 6371
-  const toRadians = (degrees: number) => (degrees * Math.PI) / 180
+): Promise<number | null> {
+  const apiKey = process.env.DISTANCE_API_KEY
+  const baseUrl = process.env.DISTANCE_API_URL || "https://maps.googleapis.com/maps/api/distancematrix/json"
 
-  const dLat = toRadians(latitude2 - latitude1)
-  const dLng = toRadians(longitude2 - longitude1)
-  const lat1Rad = toRadians(latitude1)
-  const lat2Rad = toRadians(latitude2)
+  if (!apiKey) {
+    console.error("[Delivery] DISTANCE_API_KEY is not set.")
+    return null
+  }
 
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1Rad) * Math.cos(lat2Rad)
+  try {
+    const url = `${baseUrl}?origins=${latitude1},${longitude1}&destinations=${latitude2},${longitude2}&key=${apiKey}`
+    const res = await fetch(url)
+    if (!res.ok) {
+      console.error(`[Delivery] Distance API returned ${res.status}`)
+      return null
+    }
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  return Number((earthRadiusKm * c).toFixed(2))
+    const data = await res.json()
+    if (data.rows?.[0]?.elements?.[0]?.status === "OK") {
+       const meters = data.rows[0].elements[0].distance.value
+       return Number((meters / 1000).toFixed(2))
+    }
+    
+    console.error("[Delivery] Distance API returned invalid format or status.", data)
+    return null
+  } catch (error) {
+     console.error("[Delivery] API Error", error)
+     return null
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -148,18 +162,24 @@ export interface NearestBranchResult {
   deliveryCharge: number
 }
 
-export function selectNearestEligibleBranch(
+export async function selectNearestEligibleBranch(
   customerLat: number,
   customerLng: number,
   branches: BranchDeliverySettings[]
-): NearestBranchResult | null {
+): Promise<NearestBranchResult | null> {
   let best: NearestBranchResult | null = null
 
   for (const branch of branches) {
     if (!branch.latitude || !branch.longitude) continue
     if (!branch.delivery_enabled) continue
 
-    const distanceKm = calculateDistanceKm(branch.latitude, branch.longitude, customerLat, customerLng)
+    const distanceKm = await getRoadDistanceKm(branch.latitude, branch.longitude, customerLat, customerLng)
+    
+    // If API failed, we cannot serve this order via this branch
+    if (distanceKm === null) {
+      console.warn(`[Delivery] Could not calculate road distance for branch ${branch.id}`)
+      continue
+    }
 
     // If branch has a max delivery distance, skip branches that are too far
     if (branch.delivery_max_distance_km !== null && branch.delivery_max_distance_km !== undefined) {
@@ -309,7 +329,7 @@ export async function resolveWhatsappDeliveryQuote(
         return { ok: false, error: "No active branches are available for delivery." }
       }
 
-      const nearest = selectNearestEligibleBranch(existingAddress.latitude, existingAddress.longitude, branches)
+      const nearest = await selectNearestEligibleBranch(existingAddress.latitude, existingAddress.longitude, branches)
       if (!nearest) {
         return {
           ok: false,
@@ -380,7 +400,7 @@ export async function resolveWhatsappDeliveryQuote(
     return { ok: false, error: "No active branches are available for delivery." }
   }
 
-  const nearest = selectNearestEligibleBranch(resolvedCoords.latitude, resolvedCoords.longitude, branches)
+  const nearest = await selectNearestEligibleBranch(resolvedCoords.latitude, resolvedCoords.longitude, branches)
   if (!nearest) {
     return {
       ok: false,
@@ -460,7 +480,7 @@ export async function resolveDeliveryQuoteFromCoords(
     return { ok: false, error: "No active branches are available for delivery." }
   }
 
-  const nearest = selectNearestEligibleBranch(latitude, longitude, branches)
+  const nearest = await selectNearestEligibleBranch(latitude, longitude, branches)
   if (!nearest) {
     return {
       ok: false,

@@ -28,6 +28,7 @@ export async function GET(request: Request) {
     
     const whereClause: any = {
       restaurant_id: session.user.restaurant_id,
+      ...(session.user.branch_id ? { branch_id: session.user.branch_id } : {}),
     }
     
     if (status) {
@@ -85,6 +86,7 @@ export async function POST(request: Request) {
         include: { addresses: true },
       })
       if (!customer) throw new Error("Customer not found")
+      if (customer.restaurant_id !== restaurant.id) throw new Error("Customer does not belong to this restaurant")
       
       const address = customer.addresses[0]
       if (!address) throw new Error("Customer has no address")
@@ -150,6 +152,7 @@ export async function POST(request: Request) {
         data: {
           order_number: orderNumber,
           restaurant_id: restaurant.id,
+          branch_id: customer.branch_id,
           customer_id: customer.id,
           customer_name_snapshot: customer.name,
           customer_phone_snapshot: customer.phone,

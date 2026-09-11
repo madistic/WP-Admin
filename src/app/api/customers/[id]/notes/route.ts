@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 
 export async function GET(
   request: Request,
@@ -13,7 +14,7 @@ export async function GET(
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const notes = await prisma.customerNote.findMany({
-      where: { customer_id: customerId },
+      where: { customer_id: customerId, restaurant_id: session.user.restaurant_id, ...(session.user.branch_id ? { branch_id: session.user.branch_id } : {}) },
       include: {
         user: { select: { name: true, email: true } },
       },
@@ -42,8 +43,16 @@ export async function POST(
       return NextResponse.json({ error: "Note content cannot be empty" }, { status: 400 })
     }
 
+    const branchId = session.user.branch_id ?? (await getDefaultBranchId(session.user.restaurant_id))
+
+    if (!branchId) {
+      return NextResponse.json({ error: "No branch available for this restaurant." }, { status: 400 })
+    }
+
     const newNote = await prisma.customerNote.create({
       data: {
+        restaurant_id: session.user.restaurant_id,
+        branch_id: branchId,
         customer_id: customerId,
         user_id: session.user.id,
         note: note.trim(),
@@ -55,6 +64,8 @@ export async function POST(
 
     await prisma.customerActivity.create({
       data: {
+        restaurant_id: session.user.restaurant_id,
+        branch_id: branchId,
         customer_id: customerId,
         type: "NOTE_ADDED",
         description: `Internal staff note added by ${session.user.name || "staff"}`,

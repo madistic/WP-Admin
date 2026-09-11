@@ -18,6 +18,7 @@ export async function PATCH(
 
     const { status, reason } = await request.json()
     const restaurantId = session.user.restaurant_id
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
 
     if (!status || !Object.values(OrderStatus).includes(status)) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 })
@@ -26,7 +27,7 @@ export async function PATCH(
     // Run transaction
     const updatedOrder = await prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({
-        where: { id: orderId, restaurant_id: restaurantId },
+        where: { id: orderId, restaurant_id: restaurantId, ...branchScope },
       })
 
       if (!order) {

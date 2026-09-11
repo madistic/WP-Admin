@@ -5,12 +5,14 @@ declare module "next-auth" {
     user: {
       id: string
       restaurant_id: string
+      branch_id?: string | null
       role: string
     } & DefaultSession["user"]
   }
 
   interface User {
     restaurant_id: string
+    branch_id?: string | null
     role: string
   }
 }
@@ -19,6 +21,7 @@ declare module "next-auth/jwt" {
   interface JWT {
     id: string
     restaurant_id: string
+    branch_id?: string | null
     role: string
   }
 }

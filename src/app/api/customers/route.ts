@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import { normalizePhoneNumber } from "@/lib/phone"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 
 export async function GET(request: Request) {
   try {
@@ -22,11 +23,13 @@ export async function GET(request: Request) {
     const skip = (page - 1) * limit
 
     const restaurantId = session.user.restaurant_id
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
 
     // Fetch all customers for this restaurant with order aggregates
     let customers = await prisma.customer.findMany({
       where: {
         restaurant_id: restaurantId,
+        ...branchScope,
       },
       include: {
         orders: {
@@ -104,7 +107,7 @@ export async function GET(request: Request) {
 
     // Calculate Dynamic KPI Statistics
     const allRestaurantCustomers = await prisma.customer.findMany({
-      where: { restaurant_id: restaurantId },
+      where: { restaurant_id: restaurantId, ...branchScope },
       include: {
         orders: {
           where: { status: "DELIVERED" },
@@ -179,12 +182,19 @@ export async function POST(request: Request) {
     }
 
     const restaurantId = session.user.restaurant_id
+    const branchId = session.user.branch_id ?? (await getDefaultBranchId(restaurantId))
+
+    if (!branchId) {
+      return NextResponse.json({ error: "No branch available for this restaurant." }, { status: 400 })
+    }
+
     const normalizedPhone = normalizePhoneNumber(phone)
 
-    // Rule 1 & Rule 24: Deduplication check per restaurant
+    // Rule 1 & Rule 24: Deduplication check per restaurant/branch
     const existing = await prisma.customer.findFirst({
       where: {
         restaurant_id: restaurantId,
+        branch_id: branchId,
         phone: normalizedPhone,
       },
     })
@@ -203,6 +213,7 @@ export async function POST(request: Request) {
     const customer = await prisma.customer.create({
       data: {
         restaurant_id: restaurantId,
+        branch_id: branchId,
         name,
         phone: normalizedPhone,
         email,
@@ -210,6 +221,8 @@ export async function POST(request: Request) {
         addresses: default_address
           ? {
               create: {
+                restaurant_id: restaurantId,
+                branch_id: branchId,
                 address_line: default_address,
                 is_default: true,
                 address_type: "Home",
@@ -218,6 +231,8 @@ export async function POST(request: Request) {
           : undefined,
         activities: {
           create: {
+            restaurant_id: restaurantId,
+            branch_id: branchId,
             type: "CUSTOMER_CREATED",
             description: "Customer profile created manually by staff",
           },

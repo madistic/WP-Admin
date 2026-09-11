@@ -1,0 +1,3 @@
+-- This migration records the branch-aware schema changes that were already applied to the live database.
+-- The live database was backfilled manually to add Branch, branch_id, restaurant_id, and enum remapping
+-- without destructive reset or data loss.

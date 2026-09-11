@@ -12,6 +12,7 @@ export async function GET(request: Request) {
     }
 
     const restaurantId = session.user.restaurant_id
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
     const { searchParams } = new URL(request.url)
     const range = searchParams.get("range") || "TODAY"
     const format = searchParams.get("format") || "excel" // excel
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
     })
 
     const orders = await prisma.order.findMany({
-      where: { restaurant_id: restaurantId },
+      where: { restaurant_id: restaurantId, ...branchScope },
       include: {
         items: true,
         customer: true,

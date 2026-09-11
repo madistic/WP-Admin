@@ -33,6 +33,7 @@ import {
 import prisma from "@/lib/prisma"
 import { Prisma } from "@prisma/client"
 import { OrderType } from "@prisma/client"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 import { CUSTOMER_BRAND_NAME, CUSTOMER_BRAND_PROFILE } from "./branding"
 
 export interface IncomingWhatsAppMessageData {
@@ -83,11 +84,16 @@ export async function processIncomingWhatsAppMessage(
 
   const interactionMessageId = message.interactiveMessageId || message.id
   try {
+    const branchId = await getDefaultBranchId(restaurant.id)
+    if (!branchId) {
+      return { handled: true, responseText: "Restaurant has no active branch configured.", intent: "missing_branch" }
+    }
     await prisma.whatsAppMessageReceipt.create({
       data: {
         message_id: message.id,
         interaction_message_id: interactionMessageId,
         restaurant_id: restaurant.id,
+        branch_id: branchId,
         sender: message.from,
       },
     })
@@ -368,11 +374,16 @@ async function processIncomingWhatsAppMessageUnlocked(
       if (interactiveId === "addr_save_yes" || cleanText === "save" || cleanText === "yes") {
         const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
         // Create or find customer to save address
-        let customer = await prisma.customer.findFirst({ where: { restaurant_id: restaurant.id, phone: cleanPhone } })
+        const branchId = await getDefaultBranchId(restaurant.id)
+        if (!branchId) {
+          return { handled: true, responseText: "Restaurant has no active branch configured.", intent: "missing_branch" }
+        }
+        let customer = await prisma.customer.findFirst({ where: { restaurant_id: restaurant.id, branch_id: branchId, phone: cleanPhone } })
         if (!customer) {
           customer = await prisma.customer.create({
             data: {
               restaurant_id: restaurant.id,
+              branch_id: branchId,
               phone: cleanPhone,
               name: cart.customer_name || "WhatsApp Customer",
               whatsapp_number: cleanPhone,
@@ -382,6 +393,8 @@ async function processIncomingWhatsAppMessageUnlocked(
         if (customer && cart.delivery_address) {
           await prisma.customerAddress.create({
             data: {
+              restaurant_id: restaurant.id,
+              branch_id: branchId,
               customer_id: customer.id,
               address_line: cart.delivery_address,
               label: "Saved Address",
@@ -622,10 +635,13 @@ export async function handleInitialGreeting(
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
 
   const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
-  const customer = await prisma.customer.findUnique({
-    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhone } },
-    select: { name: true }
-  })
+  const branchId = await getDefaultBranchId(restaurant.id)
+  const customer = branchId
+    ? await prisma.customer.findFirst({
+        where: { restaurant_id: restaurant.id, branch_id: branchId, phone: cleanPhone },
+        select: { name: true }
+      })
+    : null
 
   const greetingName = customer?.name || "there"
   const responseText = `Hello ${greetingName} 👋\nWelcome to ${CUSTOMER_BRAND_PROFILE}\n\nWhat would you like to enjoy today?`
@@ -1021,10 +1037,13 @@ export async function handleNativeOrderMessage(
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
 
   const cleanPhoneO = sender.startsWith("+") ? sender : `+${sender}`
-  const existingCustomer = await prisma.customer.findUnique({
-    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhoneO } },
-    select: { name: true }
-  })
+  const branchId = await getDefaultBranchId(restaurant.id)
+  const existingCustomer = branchId
+    ? await prisma.customer.findFirst({
+        where: { restaurant_id: restaurant.id, branch_id: branchId, phone: cleanPhoneO },
+        select: { name: true }
+      })
+    : null
 
   const greetingName = existingCustomer?.name || "there"
   const responseText = `Hello *${greetingName}* 👋\nReady to checkout?`
@@ -1479,9 +1498,12 @@ export async function handleInitiateCheckout(
   }
 
   const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
-  const existingCustomer = await prisma.customer.findUnique({
-    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhone } },
-  })
+  const branchId = await getDefaultBranchId(restaurant.id)
+  const existingCustomer = branchId
+    ? await prisma.customer.findFirst({
+        where: { restaurant_id: restaurant.id, branch_id: branchId, phone: cleanPhone },
+      })
+    : null
 
   if (existingCustomer && existingCustomer.name) {
     await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_LOCATION_CHOICE", {
@@ -1519,15 +1541,18 @@ async function promptForAddressSelection(
   cleanPhone: string,
   customerName: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const existingCustomer = await prisma.customer.findUnique({
-    where: { restaurant_id_phone: { restaurant_id: restaurant.id, phone: cleanPhone } },
-    include: { addresses: true }
-  })
+  const branchId = await getDefaultBranchId(restaurant.id)
+  const existingCustomer = branchId
+    ? await prisma.customer.findFirst({
+        where: { restaurant_id: restaurant.id, branch_id: branchId, phone: cleanPhone },
+        include: { addresses: true }
+      })
+    : null
 
   const addresses = existingCustomer?.addresses || []
   
   if (addresses.length > 0) {
-    const rows = addresses.slice(0, 8).map((addr, idx) => ({
+    const rows = addresses.slice(0, 8).map((addr) => ({
       id: `addr_select_${addr.id}`,
       title: `🏠 ${addr.label || 'Saved Address'}`,
       description: addr.address_line.slice(0, 72)
@@ -1537,7 +1562,7 @@ async function promptForAddressSelection(
 
     const responseText = `📍 *Select your delivery address, ${customerName}*`
     if (restaurant.whatsapp_phone_number_id) {
-      const listRows = addresses.slice(0, 7).map((addr) => ({
+      const listRows = addresses.slice(0, 7).map((addr: any) => ({
         id: `addr_select_${addr.id}`,
         title: `🏠 ${addr.label || 'Saved Address'}`,
         description: addr.address_line.slice(0, 72)

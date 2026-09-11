@@ -1,5 +1,6 @@
 import prisma from "@/lib/prisma"
 import { OrderSource, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from "@prisma/client"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 
 export interface CartItemAddOptions {
   variantId?: string
@@ -81,14 +82,18 @@ export async function getOrCreateCart(restaurantId: string, customerWhatsappNumb
     throw new Error("restaurantId and customerWhatsappNumber are required for cart creation")
   }
 
+  const branchId = await getDefaultBranchId(restaurantId)
+  if (!branchId) {
+    throw new Error("No branch found for this restaurant.")
+  }
+
   const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
 
-  const cart = await prisma.whatsAppCart.findUnique({
+  const cart = await prisma.whatsAppCart.findFirst({
     where: {
-      restaurant_id_customer_whatsapp_number: {
-        restaurant_id: restaurantId,
-        customer_whatsapp_number: cleanPhone,
-      },
+      restaurant_id: restaurantId,
+      branch_id: branchId,
+      customer_whatsapp_number: cleanPhone,
     },
     include: {
       items: {
@@ -105,6 +110,7 @@ export async function getOrCreateCart(restaurantId: string, customerWhatsappNumb
   return await prisma.whatsAppCart.create({
     data: {
       restaurant_id: restaurantId,
+      branch_id: branchId,
       customer_whatsapp_number: cleanPhone,
       checkout_step: "IDLE",
     },
@@ -402,12 +408,12 @@ export async function updateCartCheckoutStep(
 export async function clearCart(restaurantId: string, customerWhatsappNumber: string): Promise<boolean> {
   const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
 
-  const cart = await prisma.whatsAppCart.findUnique({
+  const branchId = await getDefaultBranchId(restaurantId)
+  const cart = await prisma.whatsAppCart.findFirst({
     where: {
-      restaurant_id_customer_whatsapp_number: {
-        restaurant_id: restaurantId,
-        customer_whatsapp_number: cleanPhone,
-      },
+      restaurant_id: restaurantId,
+      branch_id: branchId ?? undefined,
+      customer_whatsapp_number: cleanPhone,
     },
   })
 
@@ -737,12 +743,16 @@ export async function createOrderFromCart(
   const finalTotal = recalculatedSubtotal + deliveryFee
 
   // 4. Reuse or Create Customer record for (restaurant_id, phone)
-  let customer = await prisma.customer.findUnique({
+  const branchId = await getDefaultBranchId(restaurantId)
+  if (!branchId) {
+    return { success: false, error: "No branch found for this restaurant." }
+  }
+
+  let customer = await prisma.customer.findFirst({
     where: {
-      restaurant_id_phone: {
-        restaurant_id: restaurantId,
-        phone: cleanPhone,
-      },
+      restaurant_id: restaurantId,
+      branch_id: branchId,
+      phone: cleanPhone,
     },
   })
 
@@ -750,6 +760,7 @@ export async function createOrderFromCart(
     customer = await prisma.customer.create({
       data: {
         restaurant_id: restaurantId,
+        branch_id: branchId,
         phone: cleanPhone,
         name: checkoutData.customerName || "WhatsApp Customer",
         whatsapp_number: cleanPhone,
@@ -777,6 +788,7 @@ export async function createOrderFromCart(
       data: {
         order_number: orderNumber,
         restaurant_id: restaurantId,
+        branch_id: branchId,
         customer_id: customer.id,
         customer_name_snapshot: checkoutData.customerName || customer.name,
         customer_phone_snapshot: cleanPhone,

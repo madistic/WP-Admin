@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 
 export async function GET(
   request: Request,
@@ -15,12 +16,14 @@ export async function GET(
     }
 
     const restaurantId = session.user.restaurant_id
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
 
-    // Rule 24: Scoped by restaurant_id & customer_id
+    // Rule 24: Scoped by restaurant_id and branch_id for branch users
     const customer = await prisma.customer.findFirst({
       where: {
         id: customerId,
         restaurant_id: restaurantId,
+        ...branchScope,
       },
       include: {
         addresses: {
@@ -123,8 +126,10 @@ export async function PUT(
     const body = await request.json()
     const restaurantId = session.user.restaurant_id
 
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
+
     const existing = await prisma.customer.findFirst({
-      where: { id: customerId, restaurant_id: restaurantId },
+      where: { id: customerId, restaurant_id: restaurantId, ...branchScope },
     })
 
     if (!existing) {
@@ -144,6 +149,8 @@ export async function PUT(
 
     await prisma.customerActivity.create({
       data: {
+        restaurant_id: restaurantId,
+        branch_id: session.user.branch_id ?? (await getDefaultBranchId(restaurantId)) ?? existing.branch_id,
         customer_id: customerId,
         type: "PROFILE_UPDATED",
         description: `Customer profile updated by ${session.user.name || "staff"}`,

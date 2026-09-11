@@ -6,6 +6,7 @@ import { OrderSource, OrderStatus, OrderType, PaymentMethod, PaymentStatus } fro
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import { normalizePhoneNumber } from "@/lib/phone"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 
 type PosItem = { menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[]; description?: string }
 
@@ -13,18 +14,20 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user || session.user.restaurant_id !== payload.restaurant_id) return { error: "Unauthorized" }
+    const branchId = session.user.branch_id ?? (await getDefaultBranchId(payload.restaurant_id))
+    if (!branchId) return { error: "No branch found for this restaurant." }
     if (!payload.client_request_id || !payload.items?.length) return { error: "Add at least one menu item." }
     if (payload.order_type === OrderType.DINING && !payload.table_number?.trim()) return { error: "Enter a table number for dining orders." }
     if (!payload.customer_name?.trim() || !payload.customer_phone?.trim()) return { error: "Customer name and phone number are required." }
     if (payload.order_type === OrderType.HOME_DELIVERY && !payload.address?.trim()) return { error: "Delivery address is required for home delivery." }
 
     const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.order.findUnique({ where: { restaurant_id_client_request_id: { restaurant_id: payload.restaurant_id, client_request_id: payload.client_request_id } } })
+      const existing = await tx.order.findFirst({ where: { restaurant_id: payload.restaurant_id, branch_id: branchId, client_request_id: payload.client_request_id } })
       if (existing) return existing
       const restaurant = await tx.restaurant.findUnique({ where: { id: payload.restaurant_id } })
       if (!restaurant) throw new Error("Restaurant not found")
       const phone = normalizePhoneNumber(payload.customer_phone!)
-      const customer = await tx.customer.upsert({ where: { restaurant_id_phone: { restaurant_id: payload.restaurant_id, phone } }, update: payload.customer_name?.trim() ? { name: payload.customer_name.trim() } : {}, create: { restaurant_id: payload.restaurant_id, phone, name: payload.customer_name?.trim() || "Walk-in Customer" } })
+      const customer = await tx.customer.upsert({ where: { restaurant_id_branch_id_phone: { restaurant_id: payload.restaurant_id, branch_id: branchId, phone } }, update: payload.customer_name?.trim() ? { name: payload.customer_name.trim() } : {}, create: { restaurant_id: payload.restaurant_id, branch_id: branchId, phone, name: payload.customer_name?.trim() || "Walk-in Customer" } })
 
       const orderItems = []
       let subtotal = 0
@@ -45,7 +48,7 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
       const deliveryFee = payload.order_type === OrderType.HOME_DELIVERY ? restaurant.delivery_fee : 0
       const address = payload.order_type === OrderType.HOME_DELIVERY ? payload.address!.trim() : payload.order_type === OrderType.DINING ? `Dining Table ${payload.table_number!.trim()}` : "Takeaway"
       const orderNumber = `POS-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`
-      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: PaymentMethod.COD, payment_status: PaymentStatus.PENDING, status: OrderStatus.NEW, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: OrderStatus.NEW, reason: "POS order created" } } } })
+      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: PaymentMethod.COD, payment_status: PaymentStatus.PENDING, status: OrderStatus.NEW, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: OrderStatus.NEW, reason: "POS order created" } } } })
     })
 
     revalidatePath("/orders")

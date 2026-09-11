@@ -44,6 +44,7 @@ export const authOptions: NextAuthOptions = {
           email: user.email,
           name: user.name,
           restaurant_id: user.restaurant_id,
+          branch_id: user.branch_id,
           role: user.role,
         }
       },
@@ -54,6 +55,7 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = user.id
         token.restaurant_id = (user as any).restaurant_id
+        token.branch_id = (user as any).branch_id ?? null
         token.role = (user as any).role
       }
       return token
@@ -62,6 +64,7 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = token.id as string
         session.user.restaurant_id = token.restaurant_id as string
+        session.user.branch_id = token.branch_id as string | null | undefined
         session.user.role = token.role as string
       }
       return session

@@ -11,6 +11,7 @@ export async function GET(request: Request) {
     }
 
     const restaurantId = session.user.restaurant_id
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
     const { searchParams } = new URL(request.url)
     const range = searchParams.get("range") || "TODAY" // TODAY, YESTERDAY, 7DAYS, 30DAYS, THIS_MONTH, CUSTOM
     const startDateParam = searchParams.get("startDate")
@@ -49,6 +50,7 @@ export async function GET(request: Request) {
     const currentOrders = await prisma.order.findMany({
       where: {
         restaurant_id: restaurantId,
+        ...branchScope,
         created_at: { gte: startDate, lte: endDate },
       },
       include: {
@@ -70,6 +72,7 @@ export async function GET(request: Request) {
     const prevOrders = await prisma.order.findMany({
       where: {
         restaurant_id: restaurantId,
+        ...branchScope,
         created_at: { gte: prevStartDate, lte: prevEndDate },
       },
     })
@@ -97,7 +100,7 @@ export async function GET(request: Request) {
 
     for (const custId of currentCustomerIds) {
       const firstOrder = await prisma.order.findFirst({
-        where: { restaurant_id: restaurantId, customer_id: custId, status: { notIn: ["CANCELLED", "REJECTED"] } },
+        where: { restaurant_id: restaurantId, ...branchScope, customer_id: custId, status: { notIn: ["CANCELLED", "REJECTED"] } },
         orderBy: { created_at: "asc" },
       })
       if (firstOrder && firstOrder.created_at >= startDate && firstOrder.created_at <= endDate) {

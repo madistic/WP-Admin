@@ -14,10 +14,13 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
+
     const order = await prisma.order.findFirst({
       where: {
         id: orderId,
         restaurant_id: session.user.restaurant_id,
+        ...branchScope,
       },
       include: {
         items: true,

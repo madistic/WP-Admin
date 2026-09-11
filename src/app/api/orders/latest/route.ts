@@ -12,9 +12,11 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const since = searchParams.get("since")
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
 
     const whereClause: any = {
       restaurant_id: session.user.restaurant_id,
+      ...branchScope,
       status: "NEW",
     }
 

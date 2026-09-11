@@ -18,10 +18,12 @@ export async function GET(request: Request) {
     const dateFrom = searchParams.get("dateFrom")   // ISO date string
     const dateTo = searchParams.get("dateTo")       // ISO date string
     const search = searchParams.get("search")?.trim()
+    const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
 
     // Build dynamic where clause
     const where: Prisma.OrderWhereInput = {
       restaurant_id: session.user.restaurant_id,
+      ...branchScope,
       status: statusParam
         ? { equals: statusParam as any }
         : { in: ["DELIVERED", "REJECTED", "CANCELLED"] },

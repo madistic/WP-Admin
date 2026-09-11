@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma"
+import { getDefaultBranchId } from "@/lib/branch-scope"
 
 /**
  * Retrieves a restaurant record using the Meta WhatsApp phone_number_id.
@@ -46,10 +47,16 @@ export async function getOrCreateCustomerForRestaurant(
   // Format phone number to clean representation
   const cleanPhone = whatsappNumber.startsWith("+") ? whatsappNumber : `+${whatsappNumber}`
 
-  // Look up existing customer ONLY for this specific restaurant
+  const branchId = await getDefaultBranchId(restaurantId)
+  if (!branchId) {
+    throw new Error("No branch found for this restaurant.")
+  }
+
+  // Look up existing customer ONLY for this specific restaurant and default branch
   const existing = await prisma.customer.findFirst({
     where: {
       restaurant_id: restaurantId,
+      branch_id: branchId,
       whatsapp_number: cleanPhone,
     },
   })
@@ -62,6 +69,7 @@ export async function getOrCreateCustomerForRestaurant(
   return await prisma.customer.create({
     data: {
       restaurant_id: restaurantId,
+      branch_id: branchId,
       name: name || `WhatsApp Customer (${cleanPhone.slice(-4)})`,
       phone: cleanPhone,
       whatsapp_number: cleanPhone,

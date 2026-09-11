@@ -47,16 +47,29 @@ async function main() {
     },
   })
 
-  // 2. Create the owner
+  // 2. Create the default branch and owner
+  const defaultBranch = await prisma.branch.create({
+    data: {
+      restaurant_id: restaurant.id,
+      name: 'Main Branch',
+      code: 'MAIN',
+      address: '123 Food Street, Mumbai',
+      phone: '9876543210',
+      email: 'branch@spiceroute.com',
+      is_active: true,
+    },
+  })
+
   const passwordHash = await bcrypt.hash('password123', 10)
   const owner = await prisma.user.create({
     data: {
       restaurant_id: restaurant.id,
+      branch_id: defaultBranch.id,
       name: 'Restaurant Owner',
       email: 'admin@spiceroute.com',
       phone: '9999999999',
       password_hash: passwordHash,
-      role: 'OWNER',
+      role: 'SUPER_ADMIN',
       is_active: true,
     },
   })
@@ -122,6 +135,7 @@ async function main() {
   const customer = await prisma.customer.create({
     data: {
       restaurant_id: restaurant.id,
+      branch_id: defaultBranch.id,
       name: 'Rahul Sharma',
       phone: '+919812345678',
       whatsapp_number: '+919812345678',
@@ -130,6 +144,8 @@ async function main() {
 
   const address = await prisma.customerAddress.create({
     data: {
+      restaurant_id: restaurant.id,
+      branch_id: defaultBranch.id,
       customer_id: customer.id,
       address_line: 'A-402, Sunshine Apartments',
       landmark: 'Near City Mall',
@@ -144,6 +160,7 @@ async function main() {
     data: {
       order_number: 'ORD-1001',
       restaurant_id: restaurant.id,
+      branch_id: defaultBranch.id,
       customer_id: customer.id,
       customer_name_snapshot: customer.name,
       customer_phone_snapshot: customer.phone,

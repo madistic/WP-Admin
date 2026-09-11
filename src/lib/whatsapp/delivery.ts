@@ -10,11 +10,13 @@ export interface BranchDeliverySettings {
   delivery_free_distance_km: number
   delivery_extra_charge_per_km: number
   delivery_charge_rounding: string
+  delivery_max_distance_km: number | null
 }
 
 export interface DeliveryQuoteResult {
   ok: boolean
   error?: string
+  branchId?: string
   deliveryDistanceKm?: number
   deliveryCharge?: number
   freeDeliveryDistanceKm?: number
@@ -32,23 +34,10 @@ export interface DeliveryQuoteResult {
   } | null
 }
 
-function normalizeAddressText(address: string): string {
-  return address
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[^\w\s]/g, " ")
-    .trim()
-}
-
-function toNumber(value: unknown): number | null {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) {
-    return null
-  }
-
-  return Number(value)
-}
-
-function calculateDistanceKm(
+// ─────────────────────────────────────────────
+// Haversine Distance (straight-line in KM)
+// ─────────────────────────────────────────────
+export function calculateDistanceKm(
   latitude1: number,
   longitude1: number,
   latitude2: number,
@@ -70,9 +59,12 @@ function calculateDistanceKm(
   return Number((earthRadiusKm * c).toFixed(2))
 }
 
-function calculateDeliveryCharge(
+// ─────────────────────────────────────────────
+// Delivery Charge Calculation (PER_STARTED_KM)
+// ─────────────────────────────────────────────
+export function calculateDeliveryCharge(
   distanceKm: number,
-  settings: BranchDeliverySettings
+  settings: Pick<BranchDeliverySettings, "delivery_free_distance_km" | "delivery_extra_charge_per_km" | "delivery_charge_rounding">
 ): { deliveryCharge: number; extraDistanceKm: number } {
   if (distanceKm <= 0) {
     return { deliveryCharge: 0, extraDistanceKm: 0 }
@@ -90,6 +82,7 @@ function calculateDeliveryCharge(
   if (settings.delivery_charge_rounding === "PER_FULL_KM") {
     extraDistanceUnits = Math.floor(extraDistance)
   } else {
+    // PER_STARTED_KM (default)
     extraDistanceUnits = Math.ceil(extraDistance)
   }
 
@@ -98,9 +91,37 @@ function calculateDeliveryCharge(
   return { deliveryCharge, extraDistanceKm: extraDistanceUnits }
 }
 
-export async function getBranchDeliverySettings(branchId: string): Promise<BranchDeliverySettings | null> {
-  const branch = await prisma.branch.findUnique({
-    where: { id: branchId },
+// ─────────────────────────────────────────────
+// Text Normalization for address deduplication
+// ─────────────────────────────────────────────
+function normalizeAddressText(address: string): string {
+  return address
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\w\s]/g, " ")
+    .trim()
+}
+
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return null
+  }
+  return Number(value)
+}
+
+// ─────────────────────────────────────────────
+// Get all active branches with locations for a restaurant
+// ─────────────────────────────────────────────
+export async function getActiveBranchesWithLocations(restaurantId: string): Promise<BranchDeliverySettings[]> {
+  const branches = await prisma.branch.findMany({
+    where: {
+      restaurant_id: restaurantId,
+      is_active: true,
+      delivery_enabled: true,
+      // Only branches with a valid location can serve deliveries
+      latitude: { not: null },
+      longitude: { not: null },
+    },
     select: {
       id: true,
       restaurant_id: true,
@@ -110,12 +131,54 @@ export async function getBranchDeliverySettings(branchId: string): Promise<Branc
       delivery_free_distance_km: true,
       delivery_extra_charge_per_km: true,
       delivery_charge_rounding: true,
+      delivery_max_distance_km: true,
     },
   })
 
-  return branch
+  return branches as BranchDeliverySettings[]
 }
 
+// ─────────────────────────────────────────────
+// Select nearest active branch to customer coordinates
+// Returns null if no branch can serve the customer (too far / all inactive)
+// ─────────────────────────────────────────────
+export interface NearestBranchResult {
+  branch: BranchDeliverySettings
+  distanceKm: number
+  deliveryCharge: number
+}
+
+export function selectNearestEligibleBranch(
+  customerLat: number,
+  customerLng: number,
+  branches: BranchDeliverySettings[]
+): NearestBranchResult | null {
+  let best: NearestBranchResult | null = null
+
+  for (const branch of branches) {
+    if (!branch.latitude || !branch.longitude) continue
+    if (!branch.delivery_enabled) continue
+
+    const distanceKm = calculateDistanceKm(branch.latitude, branch.longitude, customerLat, customerLng)
+
+    // If branch has a max delivery distance, skip branches that are too far
+    if (branch.delivery_max_distance_km !== null && branch.delivery_max_distance_km !== undefined) {
+      if (distanceKm > branch.delivery_max_distance_km) continue
+    }
+
+    const { deliveryCharge } = calculateDeliveryCharge(distanceKm, branch)
+
+    if (best === null || distanceKm < best.distanceKm) {
+      best = { branch, distanceKm, deliveryCharge }
+    }
+  }
+
+  return best
+}
+
+// ─────────────────────────────────────────────
+// Geocode address using Nominatim (OpenStreetMap)
+// ─────────────────────────────────────────────
 async function geocodeAddress(address: string): Promise<{
   latitude: number
   longitude: number
@@ -176,45 +239,29 @@ async function geocodeAddress(address: string): Promise<{
   }
 }
 
+// ─────────────────────────────────────────────
+// Resolve delivery quote for an address text (manual / text address)
+// Performs nearest-branch selection server-side
+// ─────────────────────────────────────────────
 export async function resolveWhatsappDeliveryQuote(
   restaurantId: string,
-  branchId: string,
+  _branchIdIgnored: string, // kept for signature compat; we always re-select nearest branch
   customerPhone: string,
   deliveryAddress: string,
-  orderType: OrderType
+  orderType: OrderType,
+  customerCoords?: { latitude: number; longitude: number } // for live-location orders
 ): Promise<DeliveryQuoteResult> {
   const cleanPhone = customerPhone.startsWith("+") ? customerPhone : `+${customerPhone}`
 
   if (orderType === OrderType.TAKEAWAY) {
     return {
       ok: true,
+      branchId: _branchIdIgnored,
       deliveryDistanceKm: 0,
       deliveryCharge: 0,
       freeDeliveryDistanceKm: 0,
       deliveryChargePerKm: 0,
       address: null,
-    }
-  }
-
-  const branch = await getBranchDeliverySettings(branchId)
-  if (!branch) {
-    return {
-      ok: false,
-      error: "Branch delivery settings are not configured yet.",
-    }
-  }
-
-  if (!branch.delivery_enabled) {
-    return {
-      ok: false,
-      error: "Home delivery is currently unavailable for this branch.",
-    }
-  }
-
-  if (!branch.latitude || !branch.longitude) {
-    return {
-      ok: false,
-      error: "This branch location is not configured yet. Please contact the restaurant admin.",
     }
   }
 
@@ -228,19 +275,127 @@ export async function resolveWhatsappDeliveryQuote(
 
   const normalizedAddress = normalizeAddressText(trimmedAddress)
 
+  // ── Find or create customer ──
+  // We need to look up customer across all branches (by restaurant + phone),
+  // but for address storage we use the eventually-selected branch
   let customer = await prisma.customer.findFirst({
     where: {
       restaurant_id: restaurantId,
-      branch_id: branchId,
       phone: cleanPhone,
     },
   })
 
+  // ── Check for existing verified address (cache hit → skip geocoding) ──
+  if (customer) {
+    const existingAddress = await prisma.customerAddress.findFirst({
+      where: {
+        restaurant_id: restaurantId,
+        customer_id: customer.id,
+        OR: [
+          { normalized_address: normalizedAddress },
+          { address_line: { equals: trimmedAddress, mode: "insensitive" } },
+        ],
+        // Must have coordinates
+        latitude: { not: null },
+        longitude: { not: null },
+      },
+      orderBy: { created_at: "desc" },
+    })
+
+    if (existingAddress && existingAddress.latitude && existingAddress.longitude) {
+      // Cache hit: use saved coordinates, select nearest branch
+      const branches = await getActiveBranchesWithLocations(restaurantId)
+      if (branches.length === 0) {
+        return { ok: false, error: "No active branches are available for delivery." }
+      }
+
+      const nearest = selectNearestEligibleBranch(existingAddress.latitude, existingAddress.longitude, branches)
+      if (!nearest) {
+        return {
+          ok: false,
+          error: "Sorry, we don't deliver to your area. Please try a different address.",
+        }
+      }
+
+      // Update cached distance if needed (branch may have moved)
+      const distanceKm = nearest.distanceKm
+      if (existingAddress.calculated_distance_km !== distanceKm) {
+        await prisma.customerAddress.update({
+          where: { id: existingAddress.id },
+          data: {
+            calculated_distance_km: distanceKm,
+            distance_calculated_at: new Date(),
+            branch_id: nearest.branch.id, // update to nearest branch
+          },
+        })
+      }
+
+      return {
+        ok: true,
+        branchId: nearest.branch.id,
+        deliveryDistanceKm: distanceKm,
+        deliveryCharge: nearest.deliveryCharge,
+        freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
+        deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+        address: {
+          id: existingAddress.id,
+          address_line: existingAddress.address_line,
+          normalized_address: existingAddress.normalized_address,
+          latitude: existingAddress.latitude,
+          longitude: existingAddress.longitude,
+          calculated_distance_km: distanceKm,
+          distance_calculated_at: existingAddress.distance_calculated_at,
+          geocoding_provider: existingAddress.geocoding_provider,
+          geocoding_metadata: existingAddress.geocoding_metadata,
+        },
+      }
+    }
+  }
+
+  // ── No cached address: resolve coordinates ──
+  let resolvedCoords: { latitude: number; longitude: number; provider: string; metadata: string } | null = null
+
+  if (customerCoords) {
+    // Live location provided – use it directly, no geocoding needed
+    resolvedCoords = {
+      latitude: customerCoords.latitude,
+      longitude: customerCoords.longitude,
+      provider: "WHATSAPP_LIVE_LOCATION",
+      metadata: JSON.stringify({ source: "live_location" }),
+    }
+  } else {
+    // Manual address – geocode via Nominatim
+    resolvedCoords = await geocodeAddress(trimmedAddress)
+    if (!resolvedCoords) {
+      return {
+        ok: false,
+        error: "We couldn't verify this delivery address. Please re-enter a clearer address or share your live location.",
+      }
+    }
+  }
+
+  // ── Select nearest active branch using resolved coordinates ──
+  const branches = await getActiveBranchesWithLocations(restaurantId)
+  if (branches.length === 0) {
+    return { ok: false, error: "No active branches are available for delivery." }
+  }
+
+  const nearest = selectNearestEligibleBranch(resolvedCoords.latitude, resolvedCoords.longitude, branches)
+  if (!nearest) {
+    return {
+      ok: false,
+      error: "Sorry, we don't deliver to your area. Please try a different address or contact us directly.",
+    }
+  }
+
+  const distanceKm = nearest.distanceKm
+
+  // ── Ensure customer exists (create under nearest branch) ──
   if (!customer) {
     customer = await prisma.customer.create({
       data: {
         restaurant_id: restaurantId,
-        branch_id: branchId,
+        branch_id: nearest.branch.id,
         phone: cleanPhone,
         name: "WhatsApp Customer",
         whatsapp_number: cleanPhone,
@@ -248,119 +403,31 @@ export async function resolveWhatsappDeliveryQuote(
     })
   }
 
-  const existingAddress = await prisma.customerAddress.findFirst({
-    where: {
+  // ── Save address under nearest branch ──
+  const addressRecord = await prisma.customerAddress.create({
+    data: {
       restaurant_id: restaurantId,
-      branch_id: branchId,
+      branch_id: nearest.branch.id,
       customer_id: customer.id,
-      OR: [
-        { normalized_address: normalizedAddress },
-        { address_line: { equals: trimmedAddress, mode: "insensitive" } },
-      ],
+      address_line: trimmedAddress,
+      normalized_address: normalizedAddress,
+      latitude: resolvedCoords.latitude,
+      longitude: resolvedCoords.longitude,
+      calculated_distance_km: distanceKm,
+      distance_calculated_at: new Date(),
+      geocoding_provider: resolvedCoords.provider,
+      geocoding_metadata: resolvedCoords.metadata,
+      label: "Saved Address",
     },
-    orderBy: { created_at: "desc" },
   })
-
-  let addressRecord = existingAddress
-
-  if (existingAddress && existingAddress.latitude && existingAddress.longitude) {
-    const calculatedDistanceKm =
-      existingAddress.calculated_distance_km ??
-      calculateDistanceKm(
-        branch.latitude,
-        branch.longitude,
-        existingAddress.latitude,
-        existingAddress.longitude
-      )
-
-    if (existingAddress.calculated_distance_km === null || existingAddress.calculated_distance_km === undefined) {
-      await prisma.customerAddress.update({
-        where: { id: existingAddress.id },
-        data: {
-          calculated_distance_km: calculatedDistanceKm,
-          distance_calculated_at: new Date(),
-        },
-      })
-    }
-
-    const pricing = calculateDeliveryCharge(calculatedDistanceKm, branch)
-
-    return {
-      ok: true,
-      deliveryDistanceKm: calculatedDistanceKm,
-      deliveryCharge: pricing.deliveryCharge,
-      freeDeliveryDistanceKm: branch.delivery_free_distance_km,
-      deliveryChargePerKm: branch.delivery_extra_charge_per_km,
-      address: {
-        id: existingAddress.id,
-        address_line: existingAddress.address_line,
-        normalized_address: existingAddress.normalized_address,
-        latitude: existingAddress.latitude,
-        longitude: existingAddress.longitude,
-        calculated_distance_km: calculatedDistanceKm,
-        distance_calculated_at: existingAddress.distance_calculated_at,
-        geocoding_provider: existingAddress.geocoding_provider,
-        geocoding_metadata: existingAddress.geocoding_metadata,
-      },
-    }
-  }
-
-  const geocodedAddress = await geocodeAddress(trimmedAddress)
-
-  if (!geocodedAddress) {
-    return {
-      ok: false,
-      error: "We couldn't verify this delivery address. Please re-enter a clearer address.",
-    }
-  }
-
-  const deliveryDistanceKm = calculateDistanceKm(
-    branch.latitude,
-    branch.longitude,
-    geocodedAddress.latitude,
-    geocodedAddress.longitude
-  )
-
-  const pricing = calculateDeliveryCharge(deliveryDistanceKm, branch)
-
-  if (addressRecord) {
-    addressRecord = await prisma.customerAddress.update({
-      where: { id: addressRecord.id },
-      data: {
-        normalized_address: normalizedAddress,
-        latitude: geocodedAddress.latitude,
-        longitude: geocodedAddress.longitude,
-        calculated_distance_km: deliveryDistanceKm,
-        distance_calculated_at: new Date(),
-        geocoding_provider: geocodedAddress.provider,
-        geocoding_metadata: geocodedAddress.metadata,
-      },
-    })
-  } else {
-    addressRecord = await prisma.customerAddress.create({
-      data: {
-        restaurant_id: restaurantId,
-        branch_id: branchId,
-        customer_id: customer.id,
-        address_line: trimmedAddress,
-        normalized_address: normalizedAddress,
-        latitude: geocodedAddress.latitude,
-        longitude: geocodedAddress.longitude,
-        calculated_distance_km: deliveryDistanceKm,
-        distance_calculated_at: new Date(),
-        geocoding_provider: geocodedAddress.provider,
-        geocoding_metadata: geocodedAddress.metadata,
-        label: "Saved Address",
-      },
-    })
-  }
 
   return {
     ok: true,
-    deliveryDistanceKm,
-    deliveryCharge: pricing.deliveryCharge,
-    freeDeliveryDistanceKm: branch.delivery_free_distance_km,
-    deliveryChargePerKm: branch.delivery_extra_charge_per_km,
+    branchId: nearest.branch.id,
+    deliveryDistanceKm: distanceKm,
+    deliveryCharge: nearest.deliveryCharge,
+    freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
+    deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
     address: {
       id: addressRecord.id,
       address_line: addressRecord.address_line,
@@ -373,4 +440,113 @@ export async function resolveWhatsappDeliveryQuote(
       geocoding_metadata: addressRecord.geocoding_metadata,
     },
   }
+}
+
+// ─────────────────────────────────────────────
+// Resolve delivery quote from saved coordinates (live location or saved address)
+// ─────────────────────────────────────────────
+export async function resolveDeliveryQuoteFromCoords(
+  restaurantId: string,
+  customerPhone: string,
+  latitude: number,
+  longitude: number,
+  addressLine: string,
+  saveAddress: boolean = true
+): Promise<DeliveryQuoteResult> {
+  const cleanPhone = customerPhone.startsWith("+") ? customerPhone : `+${customerPhone}`
+
+  const branches = await getActiveBranchesWithLocations(restaurantId)
+  if (branches.length === 0) {
+    return { ok: false, error: "No active branches are available for delivery." }
+  }
+
+  const nearest = selectNearestEligibleBranch(latitude, longitude, branches)
+  if (!nearest) {
+    return {
+      ok: false,
+      error: "Sorry, we don't deliver to your area. Your location is beyond our maximum delivery range.",
+    }
+  }
+
+  const distanceKm = nearest.distanceKm
+
+  // Ensure customer exists
+  let customer = await prisma.customer.findFirst({
+    where: { restaurant_id: restaurantId, phone: cleanPhone },
+  })
+
+  if (!customer) {
+    customer = await prisma.customer.create({
+      data: {
+        restaurant_id: restaurantId,
+        branch_id: nearest.branch.id,
+        phone: cleanPhone,
+        name: "WhatsApp Customer",
+        whatsapp_number: cleanPhone,
+      },
+    })
+  }
+
+  let addressRecord: { id: string; address_line: string; normalized_address: string | null; latitude: number | null; longitude: number | null; calculated_distance_km: number | null; distance_calculated_at: Date | null; geocoding_provider: string | null; geocoding_metadata: string | null } | null = null
+
+  if (saveAddress) {
+    const normalizedAddress = normalizeAddressText(addressLine)
+    addressRecord = await prisma.customerAddress.create({
+      data: {
+        restaurant_id: restaurantId,
+        branch_id: nearest.branch.id,
+        customer_id: customer.id,
+        address_line: addressLine,
+        normalized_address: normalizedAddress,
+        latitude,
+        longitude,
+        calculated_distance_km: distanceKm,
+        distance_calculated_at: new Date(),
+        geocoding_provider: "WHATSAPP_LIVE_LOCATION",
+        geocoding_metadata: JSON.stringify({ source: "live_location" }),
+        label: "Live Location",
+      },
+    })
+  }
+
+  return {
+    ok: true,
+    branchId: nearest.branch.id,
+    deliveryDistanceKm: distanceKm,
+    deliveryCharge: nearest.deliveryCharge,
+    freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
+    deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+    address: addressRecord
+      ? {
+          id: addressRecord.id,
+          address_line: addressRecord.address_line,
+          normalized_address: addressRecord.normalized_address,
+          latitude: addressRecord.latitude,
+          longitude: addressRecord.longitude,
+          calculated_distance_km: addressRecord.calculated_distance_km,
+          distance_calculated_at: addressRecord.distance_calculated_at,
+          geocoding_provider: addressRecord.geocoding_provider,
+          geocoding_metadata: addressRecord.geocoding_metadata,
+        }
+      : null,
+  }
+}
+
+export async function getBranchDeliverySettings(branchId: string): Promise<BranchDeliverySettings | null> {
+  const branch = await prisma.branch.findUnique({
+    where: { id: branchId },
+    select: {
+      id: true,
+      restaurant_id: true,
+      latitude: true,
+      longitude: true,
+      delivery_enabled: true,
+      delivery_free_distance_km: true,
+      delivery_extra_charge_per_km: true,
+      delivery_charge_rounding: true,
+      delivery_max_distance_km: true,
+    },
+  })
+
+  return branch
 }

@@ -7,7 +7,7 @@ export type BranchScopeSession = {
 
 export async function getDefaultBranchId(restaurantId: string): Promise<string | null> {
   const branch = await prisma.branch.findFirst({
-    where: { restaurant_id: restaurantId },
+    where: { restaurant_id: restaurantId, is_active: true },
     orderBy: { created_at: "asc" },
     select: { id: true },
   })

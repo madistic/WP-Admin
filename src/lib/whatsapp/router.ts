@@ -30,6 +30,13 @@ import {
   claimWhatsAppInteraction,
   releaseWhatsAppInteraction,
 } from "./cart"
+import {
+  resolveWhatsappDeliveryQuote,
+  resolveDeliveryQuoteFromCoords,
+  getActiveBranchesWithLocations,
+  selectNearestEligibleBranch,
+  type DeliveryQuoteResult,
+} from "./delivery"
 import prisma from "@/lib/prisma"
 import { Prisma } from "@prisma/client"
 import { OrderType } from "@prisma/client"
@@ -291,18 +298,23 @@ async function processIncomingWhatsAppMessageUnlocked(
     }
 
     if (cart.checkout_step === "AWAITING_NAME") {
-      const customerName = rawText.length > 0 ? rawText : "Customer"
+      const customerName = rawText.length > 0 ? rawText.trim() : "Customer"
+      // Save name to customer record immediately
+      const cleanPhone2 = sender.startsWith("+") ? sender : `+${sender}`
+      await prisma.customer.updateMany({
+        where: { restaurant_id: restaurant.id, phone: cleanPhone2 },
+        data: { name: customerName }
+      })
       await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_LOCATION_CHOICE", {
         customerName,
       })
-      const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
-      return await promptForAddressSelection(restaurant, sender, cleanPhone, customerName)
+      return await promptForAddressSelection(restaurant, sender, cleanPhone2, customerName)
     }
 
     if (cart.checkout_step === "AWAITING_LOCATION_CHOICE") {
       if (interactiveId === "loc_share_current" || cleanText.includes("share") || cleanText.includes("location")) {
         await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_BUILDING_NO")
-        const responseText = "📍 Please share your current location attachment via WhatsApp."
+        const responseText = "📍 Please share your live location via WhatsApp (tap 📎 → Location → Send Current Location)."
         if (restaurant.whatsapp_phone_number_id) {
           await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
         }
@@ -322,11 +334,14 @@ async function processIncomingWhatsAppMessageUnlocked(
     if (cart.checkout_step === "AWAITING_BUILDING_NO") {
       if (message.type === "location" && message.location) {
         const loc = message.location
-        const locAddress = loc.address || loc.name || `Lat: ${loc.latitude.toFixed(4)}, Long: ${loc.longitude.toFixed(4)}`
+        // Store the raw coordinates in cart for later use
+        const locAddress = loc.address || loc.name || `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`
+        // Store lat/lng encoded in delivery_address temporarily
+        const coordsEncoded = `__COORDS__${loc.latitude}__${loc.longitude}__${locAddress}`
         await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_BUILDING_NO", {
-          deliveryAddress: locAddress,
+          deliveryAddress: coordsEncoded,
         })
-        const responseText = `📍 Received location!\nNow, please reply with your *Building / Room / Flat number*:`
+        const responseText = `📍 Got your location!\nPlease reply with your *Flat/Room No & Building name*:\n_(e.g. Flat 5B, Sunrise Tower)_`
         if (restaurant.whatsapp_phone_number_id) {
           await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
         }
@@ -334,8 +349,21 @@ async function processIncomingWhatsAppMessageUnlocked(
       }
 
       if (rawText.length > 0) {
-        const fullAddress = cart.delivery_address ? `${rawText}, ${cart.delivery_address}` : rawText
-        return await processNewAddressDecision(restaurant, sender, fullAddress)
+        // Combine building info with previously stored location
+        const currentAddress = cart.delivery_address || ""
+        if (currentAddress.startsWith("__COORDS__")) {
+          // Parse encoded coords
+          const parts = currentAddress.replace("__COORDS__", "").split("__")
+          const lat = parseFloat(parts[0])
+          const lng = parseFloat(parts[1])
+          const locLabel = parts.slice(2).join("__") || `${lat}, ${lng}`
+          const fullAddress = `${rawText}, ${locLabel}`
+          // Resolve delivery quote using live coordinates
+          return await processLiveLocationAddress(restaurant, sender, lat, lng, fullAddress)
+        } else {
+          const fullAddress = currentAddress ? `${rawText}, ${currentAddress}` : rawText
+          return await processNewAddressDecision(restaurant, sender, fullAddress)
+        }
       }
     }
 
@@ -373,34 +401,8 @@ async function processIncomingWhatsAppMessageUnlocked(
     if (cart.checkout_step === "AWAITING_ADDRESS_SAVE_DECISION") {
       if (interactiveId === "addr_save_yes" || cleanText === "save" || cleanText === "yes") {
         const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
-        // Create or find customer to save address
-        const branchId = await getDefaultBranchId(restaurant.id)
-        if (!branchId) {
-          return { handled: true, responseText: "Restaurant has no active branch configured.", intent: "missing_branch" }
-        }
-        let customer = await prisma.customer.findFirst({ where: { restaurant_id: restaurant.id, branch_id: branchId, phone: cleanPhone } })
-        if (!customer) {
-          customer = await prisma.customer.create({
-            data: {
-              restaurant_id: restaurant.id,
-              branch_id: branchId,
-              phone: cleanPhone,
-              name: cart.customer_name || "WhatsApp Customer",
-              whatsapp_number: cleanPhone,
-            }
-          })
-        }
-        if (customer && cart.delivery_address) {
-          await prisma.customerAddress.create({
-            data: {
-              restaurant_id: restaurant.id,
-              branch_id: branchId,
-              customer_id: customer.id,
-              address_line: cart.delivery_address,
-              label: "Saved Address",
-            }
-          })
-        }
+        // The quote is already computed; just confirm the address was already saved in processNewAddressDecision
+        // Now proceed to order type
         return await promptForOrderType(restaurant, sender)
       }
       if (interactiveId === "addr_save_no" || cleanText === "no") {
@@ -435,9 +437,35 @@ async function processIncomingWhatsAppMessageUnlocked(
     const addressId = interactiveId.replace("addr_select_", "")
     const selectedAddress = await prisma.customerAddress.findUnique({ where: { id: addressId } })
     if (selectedAddress) {
-      await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION", {
-        deliveryAddress: selectedAddress.address_line,
-      })
+      // Re-compute nearest branch for this saved address (coordinates already known)
+      const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+      if (selectedAddress.latitude && selectedAddress.longitude) {
+        const branches = await getActiveBranchesWithLocations(restaurant.id)
+        const nearest = selectNearestEligibleBranch(selectedAddress.latitude, selectedAddress.longitude, branches)
+        if (!nearest) {
+          const errText = "❌ Sorry, delivery to your saved address is not available right now. Please choose a different address."
+          if (restaurant.whatsapp_phone_number_id) {
+            await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, errText)
+          }
+          return { handled: true, responseText: errText, intent: "delivery_unavailable" }
+        }
+        const quote: DeliveryQuoteResult = {
+          ok: true,
+          branchId: nearest.branch.id,
+          deliveryDistanceKm: nearest.distanceKm,
+          deliveryCharge: nearest.deliveryCharge,
+          freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
+          deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+        }
+        await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ORDER_TYPE", {
+          deliveryAddress: selectedAddress.address_line,
+          deliveryQuote: JSON.stringify(quote),
+        })
+      } else {
+        await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ORDER_TYPE", {
+          deliveryAddress: selectedAddress.address_line,
+        })
+      }
       return await promptForOrderType(restaurant, sender)
     }
   }
@@ -1506,27 +1534,16 @@ export async function handleInitiateCheckout(
     : null
 
   if (existingCustomer && existingCustomer.name) {
+    // Returning customer – go directly to address selection, no name prompt
     await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_LOCATION_CHOICE", {
       customerName: existingCustomer.name,
     })
-
-    const responseText = `Hi *${existingCustomer.name}* 👋\nContinue with this name or change it?`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [
-          { id: "loc_prompt_address", title: "📍 Select Address" },
-          { id: "co_change_name", title: "✏️ Change Name" },
-        ]
-      )
-    }
-    return { handled: true, responseText, intent: "awaiting_name_verification" }
+    return await promptForAddressSelection(restaurant, sender, cleanPhone, existingCustomer.name)
   }
 
+  // New customer – ask for name once
   await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_NAME")
-  const responseText = "👤 Please reply with your *Full Name* for the delivery order:"
+  const responseText = "👤 What's your name? (for the delivery order)"
 
   if (restaurant.whatsapp_phone_number_id) {
     await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
@@ -1598,53 +1615,141 @@ async function promptForAddressSelection(
   return { handled: true, responseText, intent: "awaiting_location_choice" }
 }
 
+/**
+ * Handles live-location address: computes nearest branch using GPS coords,
+ * asks for confirmation, and persists the delivery quote.
+ */
+async function processLiveLocationAddress(
+  restaurant: ResolvedRestaurantInfo,
+  sender: string,
+  latitude: number,
+  longitude: number,
+  fullAddress: string
+): Promise<{ handled: boolean; responseText: string; intent: string }> {
+  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+
+  const quote = await resolveDeliveryQuoteFromCoords(
+    restaurant.id,
+    cleanPhone,
+    latitude,
+    longitude,
+    fullAddress,
+    true // save address
+  )
+
+  if (!quote.ok) {
+    const errText = `❌ ${quote.error || "Delivery unavailable at your location."}`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        errText,
+        [
+          { id: "loc_share_current", title: "📍 Try Again" },
+          { id: "loc_enter_manual", title: "✍️ Enter Manually" },
+        ]
+      )
+    }
+    return { handled: true, responseText: errText, intent: "delivery_unavailable" }
+  }
+
+  // Persist quote and address in cart
+  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ORDER_TYPE", {
+    deliveryAddress: fullAddress,
+    deliveryQuote: JSON.stringify(quote),
+  })
+
+  const chargeText = quote.deliveryCharge === 0
+    ? `Free delivery ✨`
+    : `Delivery charge: ₹${quote.deliveryCharge?.toFixed(2)} (${quote.deliveryDistanceKm?.toFixed(1)} km)`
+
+  if (restaurant.whatsapp_phone_number_id) {
+    await sendWhatsAppTextMessage(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      `📍 Address saved!\n${chargeText}`
+    )
+  }
+
+  return await promptForOrderType(restaurant, sender)
+}
+
 async function processNewAddressDecision(
   restaurant: ResolvedRestaurantInfo,
   sender: string,
   newAddress: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
-  
-  // Check if customer already has this address
-  const customer = await prisma.customer.findFirst({
-    where: { restaurant_id: restaurant.id, phone: cleanPhone },
-    include: { addresses: true }
+
+  // Resolve delivery quote (checks cache first, geocodes if needed, selects nearest branch)
+  const branchId = await getDefaultBranchId(restaurant.id) ?? ""
+  const cart = await prisma.whatsAppCart.findFirst({
+    where: { restaurant_id: restaurant.id, customer_whatsapp_number: { endsWith: cleanPhone.slice(-10) } },
+    select: { order_type: true },
   })
+  const orderType = cart?.order_type || OrderType.HOME_DELIVERY
 
-  if (customer && customer.addresses.length > 0) {
-    // Basic deduplication: check if any existing address contains the new one (or vice versa)
-    const newLower = newAddress.toLowerCase().replace(/[^a-z0-9]/g, "")
-    const exists = customer.addresses.some(addr => {
-      const existingLower = addr.address_line.toLowerCase().replace(/[^a-z0-9]/g, "")
-      return newLower.includes(existingLower) || existingLower.includes(newLower)
-    })
+  const quote = await resolveWhatsappDeliveryQuote(
+    restaurant.id,
+    branchId,
+    cleanPhone,
+    newAddress,
+    orderType
+  )
 
-    if (exists) {
-      await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_CONFIRMATION", {
-        deliveryAddress: newAddress,
-      })
-      return await renderOrderConfirmation(restaurant, sender)
+  if (!quote.ok) {
+    const errText = `❌ ${quote.error || "We couldn't process this address. Please try again."}`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        errText,
+        [
+          { id: "loc_enter_manual", title: "✍️ Try Again" },
+          { id: "loc_share_current", title: "📍 Share Location" },
+          { id: "co_cancel", title: "❌ Cancel" },
+        ]
+      )
     }
+    return { handled: true, responseText: errText, intent: "address_unresolvable" }
   }
 
-  // Address is genuinely new, ask to save it
+  // Check if this is a brand new address or existing
+  const isNewAddress = !quote.address?.id || !quote.address.latitude
+
+  // Store address + quote in cart
   await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ADDRESS_SAVE_DECISION", {
     deliveryAddress: newAddress,
+    deliveryQuote: JSON.stringify(quote),
   })
 
-  const responseText = `📍 New location detected.\nWould you like to save this address for future orders?`
-  if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      [
-        { id: "addr_save_yes", title: "💾 Save Address" },
-        { id: "addr_save_no", title: "❌ Don't Save" },
-      ]
-    )
+  if (isNewAddress) {
+    // Ask if customer wants to save this address
+    const chargeText = quote.deliveryCharge === 0
+      ? `Free delivery ✨`
+      : `Delivery charge: ₹${quote.deliveryCharge?.toFixed(2)} (${quote.deliveryDistanceKm?.toFixed(1)} km away)`
+
+    const responseText = `📍 *Address verified!*\n${chargeText}\n\nSave this address for future orders?`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        [
+          { id: "addr_save_yes", title: "💾 Save Address" },
+          { id: "addr_save_no", title: "Use Once" },
+        ]
+      )
+    }
+    return { handled: true, responseText, intent: "awaiting_address_save_decision" }
   }
-  return { handled: true, responseText, intent: "awaiting_address_save_decision" }
+
+  // Existing address – proceed directly
+  await updateCartCheckoutStep(restaurant.id, sender, "AWAITING_ORDER_TYPE", {
+    deliveryAddress: newAddress,
+    deliveryQuote: JSON.stringify(quote),
+  })
+  return await promptForOrderType(restaurant, sender)
 }
 
 export async function renderOrderConfirmation(
@@ -1655,6 +1760,16 @@ export async function renderOrderConfirmation(
 
   if (!cart || cart.items.length === 0) {
     return await handleViewCart(restaurant, sender)
+  }
+
+  // Read delivery quote from cart
+  const cartRaw = await prisma.whatsAppCart.findFirst({
+    where: { restaurant_id: restaurant.id, customer_whatsapp_number: cart.customer_whatsapp_number },
+    select: { delivery_quote: true },
+  })
+  let quoteData: DeliveryQuoteResult | null = null
+  if (cartRaw?.delivery_quote) {
+    try { quoteData = JSON.parse(cartRaw.delivery_quote) } catch {}
   }
 
   const lines: string[] = []
@@ -1672,10 +1787,22 @@ export async function renderOrderConfirmation(
   })
 
   lines.push(`\n💵 *Subtotal:* ₹${cart.subtotal.toFixed(2)}`)
-  if (cart.delivery_fee > 0) {
-    lines.push(`🛵 *Delivery Fee:* ₹${cart.delivery_fee.toFixed(2)}`)
+
+  if (cart.order_type !== OrderType.TAKEAWAY && quoteData?.ok) {
+    const deliveryCharge = quoteData.deliveryCharge ?? 0
+    const distKm = quoteData.deliveryDistanceKm ?? 0
+    if (deliveryCharge > 0) {
+      lines.push(`🛵 *Delivery Charge:* ₹${deliveryCharge.toFixed(2)} (${distKm.toFixed(1)} km)`)
+    } else {
+      lines.push(`🛵 *Delivery:* Free (within ${quoteData.freeDeliveryDistanceKm ?? 0} km)`)
+    }
+    lines.push(`💰 *Total:* ₹${(cart.subtotal + deliveryCharge).toFixed(2)} (Pay COD)`)
+  } else {
+    if (cart.delivery_fee > 0) {
+      lines.push(`🛵 *Delivery Fee:* ₹${cart.delivery_fee.toFixed(2)}`)
+    }
+    lines.push(`💰 *Total Amount:* ₹${cart.total.toFixed(2)} (Pay COD)`)
   }
-  lines.push(`💰 *Total Amount:* ₹${cart.total.toFixed(2)} (Pay COD)`)
 
   const responseText = lines.join("\n")
 
@@ -1703,9 +1830,20 @@ export async function handleFinalOrderCreation(
   const customerName = cart?.customer_name || "WhatsApp Customer"
   const deliveryAddress = cart?.delivery_address || "WhatsApp Delivery Address"
 
+  // Retrieve persisted delivery quote
+  const cartRaw = cart ? await prisma.whatsAppCart.findFirst({
+    where: { restaurant_id: restaurant.id, customer_whatsapp_number: cart.customer_whatsapp_number },
+    select: { delivery_quote: true },
+  }) : null
+  let deliveryQuote: DeliveryQuoteResult | null = null
+  if (cartRaw?.delivery_quote) {
+    try { deliveryQuote = JSON.parse(cartRaw.delivery_quote) } catch {}
+  }
+
   const result = await createOrderFromCart(restaurant.id, sender, {
     customerName,
     deliveryAddress,
+    deliveryQuote,
   })
 
   let responseText = ""
@@ -1724,7 +1862,7 @@ export async function handleFinalOrderCreation(
     lines.push(`🎉 *Order Confirmed!*\n`)
     lines.push(`Order ID: *#${result.orderNumber}*`)
     lines.push(`Total: *₹${result.total?.toFixed(2)}*`)
-    lines.push(`\nWe'll prepare your order shortly.`)
+    lines.push(`\nWe'll prepare your order shortly. 🍽️`)
     responseText = lines.join("\n")
 
     if (restaurant.whatsapp_phone_number_id) {

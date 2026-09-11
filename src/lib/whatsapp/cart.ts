@@ -1,6 +1,7 @@
 import prisma from "@/lib/prisma"
 import { OrderSource, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from "@prisma/client"
 import { getDefaultBranchId } from "@/lib/branch-scope"
+import type { DeliveryQuoteResult } from "@/lib/whatsapp/delivery"
 
 export interface CartItemAddOptions {
   variantId?: string
@@ -386,7 +387,7 @@ export async function updateCartCheckoutStep(
   restaurantId: string,
   customerWhatsappNumber: string,
   step: string | null,
-  data?: { customerName?: string; deliveryAddress?: string; orderType?: OrderType | null }
+  data?: { customerName?: string; deliveryAddress?: string; orderType?: OrderType | null; deliveryQuote?: string | null }
 ) {
   const cleanPhone = customerWhatsappNumber.startsWith("+") ? customerWhatsappNumber : `+${customerWhatsappNumber}`
   const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
@@ -398,6 +399,7 @@ export async function updateCartCheckoutStep(
       customer_name: data?.customerName !== undefined ? data.customerName : cart.customer_name,
       delivery_address: data?.deliveryAddress !== undefined ? data.deliveryAddress : cart.delivery_address,
       order_type: data?.orderType !== undefined ? data.orderType : cart.order_type,
+      delivery_quote: data?.deliveryQuote !== undefined ? data.deliveryQuote : (cart as any).delivery_quote,
     },
   })
 }
@@ -434,6 +436,7 @@ export async function clearCart(restaurantId: string, customerWhatsappNumber: st
       customer_name: null,
       delivery_address: null,
       order_type: null,
+      delivery_quote: null,
     },
   })
 
@@ -647,7 +650,11 @@ function generateOrderNumber(): string {
 export async function createOrderFromCart(
   restaurantId: string,
   customerWhatsappNumber: string,
-  checkoutData: { customerName: string; deliveryAddress: string }
+  checkoutData: {
+    customerName: string
+    deliveryAddress: string
+    deliveryQuote?: DeliveryQuoteResult | null
+  }
 ): Promise<{ success: boolean; orderNumber?: string; total?: number; error?: string }> {
   // 1. Re-validate cart state
   const validation = await validateCartForCheckout(restaurantId, customerWhatsappNumber)
@@ -739,11 +746,14 @@ export async function createOrderFromCart(
   }
 
   const orderType = cart.order_type || OrderType.HOME_DELIVERY
-  const deliveryFee = orderType === OrderType.TAKEAWAY ? 0 : restaurant.delivery_fee || 0
+  // Use delivery charge from quote snapshot (server-side), or 0 for takeaway
+  const quote = checkoutData.deliveryQuote
+  const deliveryFee = orderType === OrderType.TAKEAWAY ? 0 : (quote?.deliveryCharge ?? restaurant.delivery_fee ?? 0)
   const finalTotal = recalculatedSubtotal + deliveryFee
 
   // 4. Reuse or Create Customer record for (restaurant_id, phone)
-  const branchId = await getDefaultBranchId(restaurantId)
+  // Branch is determined by nearest-branch logic in deliveryQuote; fall back to default only if takeaway
+  const branchId = (quote?.ok && quote?.branchId) ? quote.branchId : await getDefaultBranchId(restaurantId)
   if (!branchId) {
     return { success: false, error: "No branch found for this restaurant." }
   }
@@ -797,6 +807,11 @@ export async function createOrderFromCart(
         subtotal: recalculatedSubtotal,
         delivery_fee: deliveryFee,
         total: finalTotal,
+        // Snapshot delivery settings at time of order (immutable historical record)
+        delivery_distance_km: quote?.deliveryDistanceKm ?? null,
+        free_delivery_distance_km: quote?.freeDeliveryDistanceKm ?? null,
+        delivery_charge: quote?.deliveryCharge ?? null,
+        delivery_charge_per_km: quote?.deliveryChargePerKm ?? null,
         payment_method: PaymentMethod.COD,
         payment_status: PaymentStatus.PENDING,
         status: OrderStatus.NEW,

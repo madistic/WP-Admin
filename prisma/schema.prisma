@@ -54,6 +54,7 @@ model Branch {
   delivery_free_distance_km    Float    @default(1.5)
   delivery_extra_charge_per_km Float    @default(10)
   delivery_charge_rounding     String   @default("PER_STARTED_KM")
+  delivery_max_distance_km     Float?
   is_active                    Boolean  @default(true)
   created_at                   DateTime @default(now())
   updated_at                   DateTime @updatedAt
@@ -380,6 +381,7 @@ model WhatsAppCart {
   order_type               OrderType?
   processing_message_id    String?
   processing_started_at    DateTime?
+  delivery_quote           String?            // JSON snapshot of DeliveryQuoteResult
   created_at               DateTime           @default(now())
   updated_at               DateTime           @updatedAt
 

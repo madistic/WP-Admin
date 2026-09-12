@@ -1,4 +1,4 @@
-import { PointsTransactionType, Restaurant, Prisma } from "@prisma/client"
+import { Restaurant, Prisma } from "@prisma/client"
 
 export interface RedemptionCalculation {
   redeemablePoints: number
@@ -81,7 +81,7 @@ export async function redeemPointsTransaction(
       customer_id: customerId,
       restaurant_id: restaurantId,
       order_id: orderId,
-      type: PointsTransactionType.REDEEM,
+      type: "REDEEM",
       points: -pointsToRedeem, // Negative because we are deducting
       reason
     }
@@ -112,7 +112,7 @@ export async function earnPointsTransaction(
       customer_id: customerId,
       restaurant_id: restaurantId,
       order_id: orderId,
-      type: PointsTransactionType.EARN,
+      type: "EARN",
       points: pointsToEarn, // Positive
       reason
     }
@@ -132,7 +132,7 @@ export async function reversePointsTransaction(
   customerId: string,
   restaurantId: string,
   orderId: string,
-  type: PointsTransactionType.REFUND | PointsTransactionType.REVERSAL,
+  type: "REFUND" | "REVERSAL",
   pointsToAdjust: number, // positive number representing the absolute points
   reason: string
 ) {
@@ -145,7 +145,7 @@ export async function reversePointsTransaction(
       restaurant_id: restaurantId,
       order_id: orderId,
       type,
-      points: type === PointsTransactionType.REFUND ? pointsToAdjust : -pointsToAdjust,
+      points: type === "REFUND" ? pointsToAdjust : -pointsToAdjust,
       reason
     }
   })
@@ -153,7 +153,7 @@ export async function reversePointsTransaction(
   await tx.customer.update({
     where: { id: customerId },
     data: { 
-      points_balance: type === PointsTransactionType.REFUND 
+      points_balance: type === "REFUND" 
         ? { increment: pointsToAdjust }
         : { decrement: pointsToAdjust }
     }

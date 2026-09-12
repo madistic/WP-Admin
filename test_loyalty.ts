@@ -6,7 +6,7 @@ import {
   redeemPointsTransaction, 
   reversePointsTransaction 
 } from "./src/lib/loyalty";
-import { PointsTransactionType } from "@prisma/client";
+
 
 async function runTests() {
   console.log("Setting up test customer and restaurant...");
@@ -119,7 +119,7 @@ async function runTests() {
   console.log("--- Test 6: Cancel / Reversal / Idempotency ---");
   // Refund the redeemed points from test 2 (15 points)
   await prisma.$transaction(async (tx) => {
-    await reversePointsTransaction(tx, customer!.id, restaurant.id, "test_order_2", PointsTransactionType.REFUND, 15, "Refund cancel");
+    await reversePointsTransaction(tx, customer!.id, restaurant.id, "test_order_2", "REFUND", 15, "Refund cancel");
   });
 
   customer = await prisma.customer.findUnique({ where: { id: customer!.id } }) as any;
@@ -129,7 +129,7 @@ async function runTests() {
   let duplicateFailed = false;
   try {
     await prisma.$transaction(async (tx) => {
-      await reversePointsTransaction(tx, customer!.id, restaurant.id, "test_order_2", PointsTransactionType.REFUND, 15, "Duplicate Refund cancel");
+      await reversePointsTransaction(tx, customer!.id, restaurant.id, "test_order_2", "REFUND", 15, "Duplicate Refund cancel");
     });
   } catch (err) {
     duplicateFailed = true;

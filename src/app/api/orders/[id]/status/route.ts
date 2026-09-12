@@ -65,6 +65,48 @@ export async function PATCH(
         data: updateData,
       })
 
+      // Loyalty Logic:
+      const { earnPointsTransaction, reversePointsTransaction } = await import("@/lib/loyalty")
+      const restDb = await tx.restaurant.findUnique({
+        where: { id: restaurantId },
+        select: { loyalty_enabled: true, loyalty_amount_for_one_point: true }
+      })
+
+      if (status === "DELIVERED" && restDb?.loyalty_enabled) {
+        // Calculate the eligible amount
+        const eligibleAmount = Math.max(0, updated.total - updated.delivery_fee)
+        const earnedPoints = Math.floor(eligibleAmount / restDb.loyalty_amount_for_one_point)
+        if (earnedPoints > 0) {
+          try {
+            await earnPointsTransaction(tx, updated.customer_id, updated.restaurant_id, updated.id, earnedPoints, `Earned for order #${updated.order_number}`)
+            // We should also update the order's points_earned field
+            await tx.order.update({ where: { id: updated.id }, data: { points_earned: earnedPoints } })
+          } catch (e) {
+            console.error("Failed to earn points (already earned?):", e)
+          }
+        }
+      }
+
+      if (status === "CANCELLED" || status === "REJECTED") {
+        // Refund redeemed points
+        if (updated.points_redeemed > 0) {
+          try {
+            await reversePointsTransaction(tx, updated.customer_id, updated.restaurant_id, updated.id, "REFUND", updated.points_redeemed, `Refunded for cancelled order #${updated.order_number}`)
+          } catch (e) {
+            console.error("Failed to refund points (already refunded?):", e)
+          }
+        }
+        // Reverse earned points if any
+        if (updated.points_earned > 0) {
+          try {
+            await reversePointsTransaction(tx, updated.customer_id, updated.restaurant_id, updated.id, "REVERSAL", updated.points_earned, `Reversed for cancelled order #${updated.order_number}`)
+            await tx.order.update({ where: { id: updated.id }, data: { points_earned: 0 } })
+          } catch (e) {
+            console.error("Failed to reverse points (already reversed?):", e)
+          }
+        }
+      }
+
       await tx.orderStatusHistory.create({
         data: {
           order_id: order.id,

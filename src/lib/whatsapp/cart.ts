@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma"
 import { OrderSource, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from "@prisma/client"
 import { getDefaultBranchId } from "@/lib/branch-scope"
 import type { DeliveryQuoteResult } from "@/lib/whatsapp/delivery"
+import { calculateRedemption, redeemPointsTransaction } from "@/lib/loyalty"
 
 export interface CartItemAddOptions {
   variantId?: string
@@ -668,7 +669,12 @@ export async function createOrderFromCart(
   // 2. Fetch Restaurant for Delivery Fee & Verification
   const restaurant = await prisma.restaurant.findUnique({
     where: { id: restaurantId },
-    select: { id: true, name: true, delivery_fee: true },
+    select: { 
+      id: true, name: true, delivery_fee: true,
+      loyalty_enabled: true, loyalty_min_order_value: true, 
+      loyalty_max_redemption_percent: true, loyalty_points_value_inr: true, 
+      loyalty_amount_for_one_point: true 
+    },
   })
 
   if (!restaurant) {
@@ -794,32 +800,69 @@ export async function createOrderFromCart(
 
   // 6. Transactional Order Creation
   try {
-    const newOrder = await prisma.order.create({
-      data: {
-        order_number: orderNumber,
-        restaurant_id: restaurantId,
-        branch_id: branchId,
-        customer_id: customer.id,
-        customer_name_snapshot: checkoutData.customerName || customer.name,
-        customer_phone_snapshot: cleanPhone,
-        delivery_address_snapshot: orderType === OrderType.TAKEAWAY ? "Takeaway" : checkoutData.deliveryAddress,
-        order_type: orderType,
-        subtotal: recalculatedSubtotal,
-        delivery_fee: deliveryFee,
-        total: finalTotal,
-        // Snapshot delivery settings at time of order (immutable historical record)
-        delivery_distance_km: quote?.deliveryDistanceKm ?? null,
-        free_delivery_distance_km: quote?.freeDeliveryDistanceKm ?? null,
-        delivery_charge: quote?.deliveryCharge ?? null,
-        delivery_charge_per_km: quote?.deliveryChargePerKm ?? null,
-        payment_method: PaymentMethod.COD,
-        payment_status: PaymentStatus.PENDING,
-        status: OrderStatus.NEW,
-        source: OrderSource.WHATSAPP,
-        items: {
-          create: orderItemsData,
+    let finalOrderNumber = ""
+    let finalOrderTotal = 0
+
+    await prisma.$transaction(async (tx) => {
+      // Re-fetch customer to get exact latest balance inside transaction
+      const txCustomer = await tx.customer.findUnique({ where: { id: customer.id } })
+      
+      let pointsDiscountInr = 0
+      let redeemablePoints = 0
+      
+      if (txCustomer && restaurant) {
+        const redemption = calculateRedemption(recalculatedSubtotal, txCustomer.points_balance, restaurant)
+        pointsDiscountInr = redemption.discountValueInr
+        redeemablePoints = redemption.redeemablePoints
+      }
+
+      const discountedTotal = Math.max(0, finalTotal - pointsDiscountInr)
+
+      const newOrder = await tx.order.create({
+        data: {
+          order_number: orderNumber,
+          restaurant_id: restaurantId,
+          branch_id: branchId,
+          customer_id: customer.id,
+          customer_name_snapshot: checkoutData.customerName || customer.name,
+          customer_phone_snapshot: cleanPhone,
+          delivery_address_snapshot: orderType === OrderType.TAKEAWAY ? "Takeaway" : checkoutData.deliveryAddress,
+          order_type: orderType,
+          subtotal: recalculatedSubtotal,
+          delivery_fee: deliveryFee,
+          total: discountedTotal,
+          
+          points_redeemed: redeemablePoints,
+          points_discount_inr: pointsDiscountInr,
+          
+          // Snapshot delivery settings at time of order (immutable historical record)
+          delivery_distance_km: quote?.deliveryDistanceKm ?? null,
+          free_delivery_distance_km: quote?.freeDeliveryDistanceKm ?? null,
+          delivery_charge: quote?.deliveryCharge ?? null,
+          delivery_charge_per_km: quote?.deliveryChargePerKm ?? null,
+          payment_method: PaymentMethod.COD,
+          payment_status: PaymentStatus.PENDING,
+          status: OrderStatus.NEW,
+          source: OrderSource.WHATSAPP,
+          items: {
+            create: orderItemsData,
+          },
         },
-      },
+      })
+
+      if (redeemablePoints > 0) {
+        await redeemPointsTransaction(
+          tx,
+          customer.id,
+          restaurantId,
+          newOrder.id,
+          redeemablePoints,
+          `Redeemed for order #${newOrder.order_number}`
+        )
+      }
+
+      finalOrderNumber = newOrder.order_number
+      finalOrderTotal = newOrder.total
     })
 
     // 7. Clear cart items on successful order creation ONLY
@@ -827,8 +870,8 @@ export async function createOrderFromCart(
 
     return {
       success: true,
-      orderNumber: newOrder.order_number,
-      total: newOrder.total,
+      orderNumber: finalOrderNumber,
+      total: finalOrderTotal,
     }
   } catch (error: any) {
     console.error("[Create Order Error]:", error)

@@ -26,6 +26,14 @@ model Restaurant {
   whatsapp_phone_number_id  String?  @unique
   whatsapp_catalog_id       String?
   is_open                   Boolean  @default(true)
+
+  // Loyalty System
+  loyalty_enabled                  Boolean  @default(false)
+  loyalty_points_value_inr         Float    @default(1.0)
+  loyalty_amount_for_one_point     Float    @default(100.0)
+  loyalty_min_order_value          Float    @default(500.0)
+  loyalty_max_redemption_percent   Float    @default(50.0)
+
   created_at                DateTime @default(now())
   updated_at                DateTime @updatedAt
 
@@ -38,6 +46,7 @@ model Restaurant {
   customerNotes    CustomerNote[]
   customerActivities CustomerActivity[]
   customerAddresses CustomerAddress[]
+  pointsLedgers    PointsLedger[]
 }
 
 model Branch {
@@ -112,6 +121,7 @@ model Customer {
   date_of_birth   DateTime?
   gender          String?
   notes           String?
+  points_balance  Int      @default(0)
   is_active       Boolean  @default(true)
   created_at      DateTime @default(now())
   updated_at      DateTime @updatedAt
@@ -123,6 +133,7 @@ model Customer {
   orders     Order[]
   staffNotes CustomerNote[]
   activities CustomerActivity[]
+  pointsLedgers PointsLedger[]
 
   @@unique([restaurant_id, branch_id, phone])
   @@index([restaurant_id, branch_id])
@@ -286,6 +297,11 @@ model Order {
   delivery_charge_per_km     Float?
   table_number               String?
   client_request_id          String?
+  
+  points_earned              Int       @default(0)
+  points_redeemed            Int       @default(0)
+  points_discount_inr        Float     @default(0)
+
   subtotal                   Float
   delivery_fee               Float
   total                      Float
@@ -305,6 +321,7 @@ model Order {
   customer   Customer             @relation(fields: [customer_id], references: [id], onDelete: Restrict)
   items      OrderItem[]
   history    OrderStatusHistory[]
+  pointsLedgers PointsLedger[]
 
   @@unique([restaurant_id, branch_id, client_request_id])
   @@index([restaurant_id, branch_id, created_at])
@@ -379,6 +396,8 @@ model WhatsAppCart {
   customer_name            String?
   delivery_address         String?
   order_type               OrderType?
+  applied_points           Int                @default(0)
+  applied_points_discount  Float              @default(0)
   processing_message_id    String?
   processing_started_at    DateTime?
   delivery_quote           String?            // JSON snapshot of DeliveryQuoteResult
@@ -439,4 +458,30 @@ model WhatsAppCartItem {
 
   cart                  WhatsAppCart  @relation(fields: [cart_id], references: [id], onDelete: Cascade)
   menuItem              MenuItem      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+}
+
+model PointsLedger {
+  id            String   @id @default(uuid())
+  customer_id   String
+  restaurant_id String
+  order_id      String?
+  type          PointsTransactionType
+  points        Int
+  reason        String
+  created_at    DateTime @default(now())
+
+  customer   Customer   @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  order      Order?     @relation(fields: [order_id], references: [id], onDelete: SetNull)
+
+  @@unique([order_id, type])
+  @@index([customer_id])
+  @@index([restaurant_id])
+}
+
+enum PointsTransactionType {
+  EARN
+  REDEEM
+  REFUND
+  REVERSAL
 }

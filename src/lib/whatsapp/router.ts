@@ -42,6 +42,7 @@ import { Prisma } from "@prisma/client"
 import { OrderType } from "@prisma/client"
 import { getDefaultBranchId } from "@/lib/branch-scope"
 import { CUSTOMER_BRAND_NAME, CUSTOMER_BRAND_PROFILE } from "./branding"
+import { calculateRedemption, calculateEarnedPoints } from "@/lib/loyalty"
 
 export interface IncomingWhatsAppMessageData {
   id: string
@@ -1788,21 +1789,65 @@ export async function renderOrderConfirmation(
 
   lines.push(`\n💵 *Subtotal:* ₹${cart.subtotal.toFixed(2)}`)
 
+  let baseTotal = cart.subtotal
+  let finalDeliveryCharge = 0
+
   if (cart.order_type !== OrderType.TAKEAWAY && quoteData?.ok) {
-    const deliveryCharge = quoteData.deliveryCharge ?? 0
+    finalDeliveryCharge = quoteData.deliveryCharge ?? 0
     const distKm = quoteData.deliveryDistanceKm ?? 0
-    if (deliveryCharge > 0) {
-      lines.push(`🛵 *Delivery Charge:* ₹${deliveryCharge.toFixed(2)} (${distKm.toFixed(1)} km)`)
+    if (finalDeliveryCharge > 0) {
+      lines.push(`🛵 *Delivery Charge:* ₹${finalDeliveryCharge.toFixed(2)} (${distKm.toFixed(1)} km)`)
     } else {
       lines.push(`🛵 *Delivery:* Free (within ${quoteData.freeDeliveryDistanceKm ?? 0} km)`)
     }
-    lines.push(`💰 *Total:* ₹${(cart.subtotal + deliveryCharge).toFixed(2)} (Pay COD)`)
   } else {
     if (cart.delivery_fee > 0) {
-      lines.push(`🛵 *Delivery Fee:* ₹${cart.delivery_fee.toFixed(2)}`)
+      finalDeliveryCharge = cart.delivery_fee
+      lines.push(`🛵 *Delivery Fee:* ₹${finalDeliveryCharge.toFixed(2)}`)
     }
-    lines.push(`💰 *Total Amount:* ₹${cart.total.toFixed(2)} (Pay COD)`)
   }
+  
+  baseTotal += finalDeliveryCharge
+
+  // --- LOYALTY CALCULATION ---
+  const restDb = await prisma.restaurant.findUnique({
+    where: { id: restaurant.id },
+    select: { loyalty_enabled: true, loyalty_min_order_value: true, loyalty_max_redemption_percent: true, loyalty_points_value_inr: true, loyalty_amount_for_one_point: true }
+  })
+  
+  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+  const customer = await prisma.customer.findFirst({
+    where: { restaurant_id: restaurant.id, phone: cleanPhone },
+    select: { points_balance: true }
+  })
+
+  let pointsDiscountInr = 0
+  let redeemablePoints = 0
+  let earnedPoints = 0
+  
+  if (restDb && customer) {
+    const redemption = calculateRedemption(cart.subtotal, customer.points_balance, restDb)
+    pointsDiscountInr = redemption.discountValueInr
+    redeemablePoints = redemption.redeemablePoints
+
+    const remainingPayable = Math.max(0, cart.subtotal - pointsDiscountInr)
+    earnedPoints = calculateEarnedPoints(remainingPayable, restDb)
+
+    if (redeemablePoints > 0) {
+      lines.push(`✨ *Points Redeemed:* ${redeemablePoints} pts (-₹${pointsDiscountInr.toFixed(2)})`)
+    }
+  }
+
+  const finalTotal = Math.max(0, baseTotal - pointsDiscountInr)
+  lines.push(`💰 *Total Payable:* ₹${finalTotal.toFixed(2)} (Pay COD)`)
+
+  if (earnedPoints > 0) {
+    lines.push(`\n🎁 *Points You'll Earn:* +${earnedPoints} pts`)
+  }
+  if (customer && customer.points_balance > 0 && redeemablePoints === 0 && restDb?.loyalty_enabled) {
+    lines.push(`\n💡 _You have ${customer.points_balance} points. Min order ₹${restDb.loyalty_min_order_value} to redeem._`)
+  }
+  // ---------------------------
 
   const responseText = lines.join("\n")
 

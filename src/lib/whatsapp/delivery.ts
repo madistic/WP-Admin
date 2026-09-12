@@ -35,41 +35,64 @@ export interface DeliveryQuoteResult {
 }
 
 // ─────────────────────────────────────────────
-// Exact Road Distance (via configurable API)
+// Exact Road Distance via Google Routes API
+// Compute Route Matrix for multiple branches
 // ─────────────────────────────────────────────
-export async function getRoadDistanceKm(
-  latitude1: number,
-  longitude1: number,
-  latitude2: number,
-  longitude2: number
-): Promise<number | null> {
+async function computeRouteMatrixDistances(
+  customerLat: number,
+  customerLng: number,
+  branches: BranchDeliverySettings[]
+): Promise<(number | null)[]> {
   const apiKey = process.env.DISTANCE_API_KEY
-  const baseUrl = process.env.DISTANCE_API_URL || "https://maps.googleapis.com/maps/api/distancematrix/json"
-
   if (!apiKey) {
     console.error("[Delivery] DISTANCE_API_KEY is not set.")
-    return null
+    return branches.map(() => null)
+  }
+
+  const url = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
+  
+  const payload = {
+    origins: [
+      {
+        waypoint: { location: { latLng: { latitude: customerLat, longitude: customerLng } } }
+      }
+    ],
+    destinations: branches.map(b => ({
+      waypoint: { location: { latLng: { latitude: b.latitude, longitude: b.longitude } } }
+    })),
+    travelMode: "DRIVE"
   }
 
   try {
-    const url = `${baseUrl}?origins=${latitude1},${longitude1}&destinations=${latitude2},${longitude2}&key=${apiKey}`
-    const res = await fetch(url)
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": "originIndex,destinationIndex,distanceMeters,status"
+      },
+      body: JSON.stringify(payload)
+    })
+
     if (!res.ok) {
-      console.error(`[Delivery] Distance API returned ${res.status}`)
-      return null
+      console.error(`[Delivery] Routes API returned ${res.status}:`, await res.text())
+      return branches.map(() => null)
     }
 
     const data = await res.json()
-    if (data.rows?.[0]?.elements?.[0]?.status === "OK") {
-       const meters = data.rows[0].elements[0].distance.value
-       return Number((meters / 1000).toFixed(2))
-    }
+    const results: (number | null)[] = new Array(branches.length).fill(null)
     
-    console.error("[Delivery] Distance API returned invalid format or status.", data)
-    return null
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (item.originIndex === 0 && item.destinationIndex !== undefined && item.distanceMeters !== undefined) {
+           results[item.destinationIndex] = Number((item.distanceMeters / 1000).toFixed(2))
+        }
+      }
+    }
+    return results
   } catch (error) {
-     console.error("[Delivery] API Error", error)
-     return null
+     console.error("[Delivery] Routes API Error", error)
+     return branches.map(() => null)
   }
 }
 
@@ -167,15 +190,17 @@ export async function selectNearestEligibleBranch(
   customerLng: number,
   branches: BranchDeliverySettings[]
 ): Promise<NearestBranchResult | null> {
+  const eligibleBranches = branches.filter(b => b.delivery_enabled && b.latitude && b.longitude)
+  if (eligibleBranches.length === 0) return null
+
+  const distances = await computeRouteMatrixDistances(customerLat, customerLng, eligibleBranches)
+
   let best: NearestBranchResult | null = null
 
-  for (const branch of branches) {
-    if (!branch.latitude || !branch.longitude) continue
-    if (!branch.delivery_enabled) continue
+  for (let i = 0; i < eligibleBranches.length; i++) {
+    const branch = eligibleBranches[i]
+    const distanceKm = distances[i]
 
-    const distanceKm = await getRoadDistanceKm(branch.latitude, branch.longitude, customerLat, customerLng)
-    
-    // If API failed, we cannot serve this order via this branch
     if (distanceKm === null) {
       console.warn(`[Delivery] Could not calculate road distance for branch ${branch.id}`)
       continue
@@ -197,7 +222,7 @@ export async function selectNearestEligibleBranch(
 }
 
 // ─────────────────────────────────────────────
-// Geocode address using Nominatim (OpenStreetMap)
+// Geocode address using Google Geocoding or fallback
 // ─────────────────────────────────────────────
 async function geocodeAddress(address: string): Promise<{
   latitude: number
@@ -210,6 +235,29 @@ async function geocodeAddress(address: string): Promise<{
     return null
   }
 
+  const apiKey = process.env.DISTANCE_API_KEY
+  if (apiKey) {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(trimmedAddress)}&key=${apiKey}`
+      const response = await fetch(url)
+      if (response.ok) {
+        const data = await response.json()
+        if (data.status === "OK" && data.results && data.results.length > 0) {
+          const loc = data.results[0].geometry.location
+          return {
+            latitude: loc.lat,
+            longitude: loc.lng,
+            provider: "GOOGLE_GEOCODING",
+            metadata: JSON.stringify({ place_id: data.results[0].place_id, formatted_address: data.results[0].formatted_address })
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[WhatsApp Delivery] Google Geocoding failed:", e)
+    }
+  }
+
+  // Fallback to nominatim
   try {
     const response = await fetch(
       `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(trimmedAddress)}&limit=1`,
@@ -254,7 +302,7 @@ async function geocodeAddress(address: string): Promise<{
       }),
     }
   } catch (error) {
-    console.error("[WhatsApp Delivery] Geocoding failed:", error)
+    console.error("[WhatsApp Delivery] Nominatim Geocoding failed:", error)
     return null
   }
 }

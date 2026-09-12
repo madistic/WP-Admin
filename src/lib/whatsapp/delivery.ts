@@ -1,6 +1,8 @@
 import prisma from "@/lib/prisma"
 import { OrderType } from "@prisma/client"
 
+export const PROVISIONAL_DISTANCE_KM = 2.0
+
 export interface BranchDeliverySettings {
   id: string
   restaurant_id: string
@@ -21,6 +23,8 @@ export interface DeliveryQuoteResult {
   deliveryCharge?: number
   freeDeliveryDistanceKm?: number
   deliveryChargePerKm?: number
+  /** true when routing API was unavailable and 2 km provisional distance was used */
+  isProvisional?: boolean
   address?: {
     id: string
     address_line: string
@@ -29,6 +33,7 @@ export interface DeliveryQuoteResult {
     longitude: number | null
     calculated_distance_km: number | null
     distance_calculated_at: Date | null
+    distance_source: string | null
     geocoding_provider: string | null
     geocoding_metadata: string | null
   } | null
@@ -176,13 +181,16 @@ export async function getActiveBranchesWithLocations(restaurantId: string): Prom
 }
 
 // ─────────────────────────────────────────────
-// Select nearest active branch to customer coordinates
-// Returns null if no branch can serve the customer (too far / all inactive)
+// Select nearest active branch to customer coordinates.
+// When the routing API is unavailable, falls back to a PROVISIONAL 2 km
+// distance so customers are never blocked by an API outage.
 // ─────────────────────────────────────────────
 export interface NearestBranchResult {
   branch: BranchDeliverySettings
   distanceKm: number
   deliveryCharge: number
+  /** true = routing API failed; distance is provisional (2 km placeholder) */
+  isProvisional: boolean
 }
 
 export async function selectNearestEligibleBranch(
@@ -195,6 +203,22 @@ export async function selectNearestEligibleBranch(
 
   const distances = await computeRouteMatrixDistances(customerLat, customerLng, eligibleBranches)
 
+  // Check if ALL distances failed (API outage scenario)
+  const allNull = distances.every(d => d === null)
+
+  if (allNull) {
+    // ── Routing API is completely unavailable ──
+    // Use provisional distance so customers are not blocked.
+    // Pick the first eligible branch (no way to rank without distances).
+    console.warn(
+      `[Delivery] Routes API unavailable for all ${eligibleBranches.length} branch(es). ` +
+      `Falling back to provisional ${PROVISIONAL_DISTANCE_KM} km for branch ${eligibleBranches[0].id}.`
+    )
+    const branch = eligibleBranches[0]
+    const { deliveryCharge } = calculateDeliveryCharge(PROVISIONAL_DISTANCE_KM, branch)
+    return { branch, distanceKm: PROVISIONAL_DISTANCE_KM, deliveryCharge, isProvisional: true }
+  }
+
   let best: NearestBranchResult | null = null
 
   for (let i = 0; i < eligibleBranches.length; i++) {
@@ -202,7 +226,7 @@ export async function selectNearestEligibleBranch(
     const distanceKm = distances[i]
 
     if (distanceKm === null) {
-      console.warn(`[Delivery] Could not calculate road distance for branch ${branch.id}`)
+      console.warn(`[Delivery] Could not calculate road distance for branch ${branch.id} — skipping.`)
       continue
     }
 
@@ -214,10 +238,12 @@ export async function selectNearestEligibleBranch(
     const { deliveryCharge } = calculateDeliveryCharge(distanceKm, branch)
 
     if (best === null || distanceKm < best.distanceKm) {
-      best = { branch, distanceKm, deliveryCharge }
+      best = { branch, distanceKm, deliveryCharge, isProvisional: false }
     }
   }
 
+  // If exact distances were partially available but none were within range,
+  // do NOT fall back to provisional — the customer genuinely may be out of range.
   return best
 }
 
@@ -329,6 +355,7 @@ export async function resolveWhatsappDeliveryQuote(
       deliveryCharge: 0,
       freeDeliveryDistanceKm: 0,
       deliveryChargePerKm: 0,
+      isProvisional: false,
       address: null,
     }
   }
@@ -344,8 +371,6 @@ export async function resolveWhatsappDeliveryQuote(
   const normalizedAddress = normalizeAddressText(trimmedAddress)
 
   // ── Find or create customer ──
-  // We need to look up customer across all branches (by restaurant + phone),
-  // but for address storage we use the eventually-selected branch
   let customer = await prisma.customer.findFirst({
     where: {
       restaurant_id: restaurantId,
@@ -353,7 +378,7 @@ export async function resolveWhatsappDeliveryQuote(
     },
   })
 
-  // ── Check for existing verified address (cache hit → skip geocoding) ──
+  // ── Check for existing verified address (cache hit → skip API) ──
   if (customer) {
     const existingAddress = await prisma.customerAddress.findFirst({
       where: {
@@ -371,7 +396,53 @@ export async function resolveWhatsappDeliveryQuote(
     })
 
     if (existingAddress && existingAddress.latitude && existingAddress.longitude) {
-      // Cache hit: use saved coordinates, select nearest branch
+      const cachedSource = existingAddress.distance_source ?? "EXACT"
+
+      // If cached distance is PROVISIONAL, attempt a fresh exact calculation
+      if (cachedSource === "PROVISIONAL") {
+        console.log(`[Delivery] Cached address ${existingAddress.id} has PROVISIONAL distance — retrying exact calculation.`)
+        const branches = await getActiveBranchesWithLocations(restaurantId)
+        if (branches.length > 0) {
+          const nearest = await selectNearestEligibleBranch(existingAddress.latitude, existingAddress.longitude, branches)
+          if (nearest && !nearest.isProvisional) {
+            // Got an exact distance — update the cache
+            console.log(`[Delivery] Upgraded PROVISIONAL → EXACT for address ${existingAddress.id}: ${nearest.distanceKm} km`)
+            await prisma.customerAddress.update({
+              where: { id: existingAddress.id },
+              data: {
+                calculated_distance_km: nearest.distanceKm,
+                distance_calculated_at: new Date(),
+                distance_source: "EXACT",
+                branch_id: nearest.branch.id,
+              },
+            })
+            return {
+              ok: true,
+              branchId: nearest.branch.id,
+              deliveryDistanceKm: nearest.distanceKm,
+              deliveryCharge: nearest.deliveryCharge,
+              freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
+              deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+              isProvisional: false,
+              address: {
+                id: existingAddress.id,
+                address_line: existingAddress.address_line,
+                normalized_address: existingAddress.normalized_address,
+                latitude: existingAddress.latitude,
+                longitude: existingAddress.longitude,
+                calculated_distance_km: nearest.distanceKm,
+                distance_calculated_at: new Date(),
+                distance_source: "EXACT",
+                geocoding_provider: existingAddress.geocoding_provider,
+                geocoding_metadata: existingAddress.geocoding_metadata,
+              },
+            }
+          }
+          // API still down — continue serving provisional
+        }
+      }
+
+      // Cache hit with EXACT (or still PROVISIONAL) — use saved data
       const branches = await getActiveBranchesWithLocations(restaurantId)
       if (branches.length === 0) {
         return { ok: false, error: "No active branches are available for delivery." }
@@ -385,18 +456,23 @@ export async function resolveWhatsappDeliveryQuote(
         }
       }
 
-      // Update cached distance if needed (branch may have moved)
       const distanceKm = nearest.distanceKm
-      if (existingAddress.calculated_distance_km !== distanceKm) {
+      const newSource = nearest.isProvisional ? "PROVISIONAL" : "EXACT"
+
+      // Update cache if distance or source changed
+      if (existingAddress.calculated_distance_km !== distanceKm || cachedSource !== newSource) {
         await prisma.customerAddress.update({
           where: { id: existingAddress.id },
           data: {
             calculated_distance_km: distanceKm,
             distance_calculated_at: new Date(),
-            branch_id: nearest.branch.id, // update to nearest branch
+            distance_source: newSource,
+            branch_id: nearest.branch.id,
           },
         })
       }
+
+      console.log(`[Delivery] Address ${existingAddress.id} distance: ${distanceKm} km [${newSource}]`)
 
       return {
         ok: true,
@@ -405,6 +481,7 @@ export async function resolveWhatsappDeliveryQuote(
         deliveryCharge: nearest.deliveryCharge,
         freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
         deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+        isProvisional: nearest.isProvisional,
         address: {
           id: existingAddress.id,
           address_line: existingAddress.address_line,
@@ -413,6 +490,7 @@ export async function resolveWhatsappDeliveryQuote(
           longitude: existingAddress.longitude,
           calculated_distance_km: distanceKm,
           distance_calculated_at: existingAddress.distance_calculated_at,
+          distance_source: newSource,
           geocoding_provider: existingAddress.geocoding_provider,
           geocoding_metadata: existingAddress.geocoding_metadata,
         },
@@ -432,9 +510,10 @@ export async function resolveWhatsappDeliveryQuote(
       metadata: JSON.stringify({ source: "live_location" }),
     }
   } else {
-    // Manual address – geocode via Nominatim
+    // Manual address – geocode
     resolvedCoords = await geocodeAddress(trimmedAddress)
     if (!resolvedCoords) {
+      // No coordinates at all — cannot continue, coordinates are required for branch selection
       return {
         ok: false,
         error: "We couldn't verify this delivery address. Please re-enter a clearer address or share your live location.",
@@ -457,6 +536,9 @@ export async function resolveWhatsappDeliveryQuote(
   }
 
   const distanceKm = nearest.distanceKm
+  const distanceSource = nearest.isProvisional ? "PROVISIONAL" : "EXACT"
+
+  console.log(`[Delivery] New address distance: ${distanceKm} km [${distanceSource}] — branch ${nearest.branch.id}`)
 
   // ── Ensure customer exists (create under nearest branch) ──
   if (!customer) {
@@ -483,6 +565,7 @@ export async function resolveWhatsappDeliveryQuote(
       longitude: resolvedCoords.longitude,
       calculated_distance_km: distanceKm,
       distance_calculated_at: new Date(),
+      distance_source: distanceSource,
       geocoding_provider: resolvedCoords.provider,
       geocoding_metadata: resolvedCoords.metadata,
       label: "Saved Address",
@@ -496,6 +579,7 @@ export async function resolveWhatsappDeliveryQuote(
     deliveryCharge: nearest.deliveryCharge,
     freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
     deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+    isProvisional: nearest.isProvisional,
     address: {
       id: addressRecord.id,
       address_line: addressRecord.address_line,
@@ -504,6 +588,7 @@ export async function resolveWhatsappDeliveryQuote(
       longitude: addressRecord.longitude,
       calculated_distance_km: addressRecord.calculated_distance_km,
       distance_calculated_at: addressRecord.distance_calculated_at,
+      distance_source: distanceSource,
       geocoding_provider: addressRecord.geocoding_provider,
       geocoding_metadata: addressRecord.geocoding_metadata,
     },
@@ -537,6 +622,9 @@ export async function resolveDeliveryQuoteFromCoords(
   }
 
   const distanceKm = nearest.distanceKm
+  const distanceSource = nearest.isProvisional ? "PROVISIONAL" : "EXACT"
+
+  console.log(`[Delivery] Coords quote: ${distanceKm} km [${distanceSource}] — branch ${nearest.branch.id}`)
 
   // Ensure customer exists
   let customer = await prisma.customer.findFirst({
@@ -555,7 +643,7 @@ export async function resolveDeliveryQuoteFromCoords(
     })
   }
 
-  let addressRecord: { id: string; address_line: string; normalized_address: string | null; latitude: number | null; longitude: number | null; calculated_distance_km: number | null; distance_calculated_at: Date | null; geocoding_provider: string | null; geocoding_metadata: string | null } | null = null
+  let addressRecord: { id: string; address_line: string; normalized_address: string | null; latitude: number | null; longitude: number | null; calculated_distance_km: number | null; distance_calculated_at: Date | null; distance_source: string | null; geocoding_provider: string | null; geocoding_metadata: string | null } | null = null
 
   if (saveAddress) {
     const normalizedAddress = normalizeAddressText(addressLine)
@@ -570,6 +658,7 @@ export async function resolveDeliveryQuoteFromCoords(
         longitude,
         calculated_distance_km: distanceKm,
         distance_calculated_at: new Date(),
+        distance_source: distanceSource,
         geocoding_provider: "WHATSAPP_LIVE_LOCATION",
         geocoding_metadata: JSON.stringify({ source: "live_location" }),
         label: "Live Location",
@@ -584,6 +673,7 @@ export async function resolveDeliveryQuoteFromCoords(
     deliveryCharge: nearest.deliveryCharge,
     freeDeliveryDistanceKm: nearest.branch.delivery_free_distance_km,
     deliveryChargePerKm: nearest.branch.delivery_extra_charge_per_km,
+    isProvisional: nearest.isProvisional,
     address: addressRecord
       ? {
           id: addressRecord.id,
@@ -593,6 +683,7 @@ export async function resolveDeliveryQuoteFromCoords(
           longitude: addressRecord.longitude,
           calculated_distance_km: addressRecord.calculated_distance_km,
           distance_calculated_at: addressRecord.distance_calculated_at,
+          distance_source: addressRecord.distance_source,
           geocoding_provider: addressRecord.geocoding_provider,
           geocoding_metadata: addressRecord.geocoding_metadata,
         }

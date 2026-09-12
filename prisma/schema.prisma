@@ -161,6 +161,7 @@ model CustomerAddress {
   longitude                    Float?
   calculated_distance_km       Float?
   distance_calculated_at       DateTime?
+  distance_source              String    @default("EXACT") // EXACT | PROVISIONAL
   geocoding_provider           String?
   geocoding_metadata           String?
   delivery_instructions        String?

@@ -12,6 +12,7 @@ const navItems = [
   { name: "Branches", href: "/branches", icon: "🏪" },
   { name: "POS History", href: "/pos-history", icon: "🧾" },
   { name: "Printer Settings", href: "/settings/printer", icon: "🖨️" },
+  { name: "Redeem Points", href: "/settings/loyalty", icon: "💎" },
   { name: "History", href: "/history", icon: "📜" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
 ]

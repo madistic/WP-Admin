@@ -54,8 +54,6 @@ export default function HistoryPage() {
   const [dateTo, setDateTo] = useState("")
   const [search, setSearch] = useState("")
   const [orderType, setOrderType] = useState("")
-  const [source, setSource] = useState("")
-
   const fetchHistory = useCallback(async () => {
     setLoading(true)
     try {
@@ -65,8 +63,6 @@ export default function HistoryPage() {
       if (dateTo) params.set("dateTo", dateTo)
       if (search.trim()) params.set("search", search.trim())
       if (orderType) params.set("orderType", orderType)
-      if (source) params.set("source", source)
-
       const res = await fetch(`/api/orders/history?${params.toString()}`)
       if (res.ok) {
         const data = await res.json()
@@ -95,17 +91,6 @@ export default function HistoryPage() {
 
       {/* Filter Bar */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-4 flex flex-wrap gap-3 items-end">
-        {/* Order Source */}
-        <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Source</label>
-          <select value={source} onChange={(e) => setSource(e.target.value)} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 bg-white">
-            <option value="">All Sources</option>
-            <option value="WHATSAPP,POS">📱 WhatsApp + 💻 POS</option>
-            <option value="WHATSAPP">📱 WhatsApp Only</option>
-            <option value="POS">💻 POS Only</option>
-          </select>
-        </div>
-
         {/* Order Type */}
         <div className="flex flex-col gap-1">
           <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Order Type</label>
@@ -166,7 +151,7 @@ export default function HistoryPage() {
         </div>
 
         <button
-          onClick={() => { setStatus(""); setOrderType(""); setDateFrom(""); setDateTo(""); setSearch(""); setSource("") }}
+          onClick={() => { setStatus(""); setOrderType(""); setDateFrom(""); setDateTo(""); setSearch("") }}
           className="text-xs font-medium text-slate-500 hover:text-slate-700 px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
         >
           Clear

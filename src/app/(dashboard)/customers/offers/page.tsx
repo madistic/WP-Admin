@@ -51,12 +51,18 @@ export default function CustomerOffersPage() {
         })
       })
 
+      const data = await res.json()
+
       if (res.ok) {
-        const data = await res.json()
-        setFeedback({ type: "success", text: `Campaign sent successfully to ${data.total_sent} customers.` })
+        setFeedback({ 
+          type: "success", 
+          text: `Campaign complete! Sent: ${data.total_sent} | Failed: ${data.total_failed} | Skipped: ${data.total_skipped}` 
+        })
       } else {
-        const err = await res.json()
-        setFeedback({ type: "error", text: err.error || "Failed to send campaign." })
+        setFeedback({ 
+          type: "error", 
+          text: data.error + (data.total_failed > 0 ? ` (Failed: ${data.total_failed}, Skipped: ${data.total_skipped})` : "")
+        })
       }
     } catch (e: any) {
       setFeedback({ type: "error", text: e.message || "An error occurred." })

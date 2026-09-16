@@ -11,6 +11,7 @@ const navItems = [
   { name: "Categories", href: "/categories", icon: "📁" },
   { name: "Branches", href: "/branches", icon: "🏪" },
   { name: "POS History", href: "/pos-history", icon: "🧾" },
+  { name: "Customer Offers", href: "/customers/offers", icon: "📣" },
   { name: "Printer Settings", href: "/settings/printer", icon: "🖨️" },
   { name: "Redeem Points", href: "/settings/loyalty", icon: "💎" },
   { name: "History", href: "/history", icon: "📜" },

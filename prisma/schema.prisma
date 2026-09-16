@@ -47,6 +47,8 @@ model Restaurant {
   customerActivities CustomerActivity[]
   customerAddresses CustomerAddress[]
   pointsLedgers    PointsLedger[]
+  campaignTemplates CustomerCampaignTemplate[]
+  campaigns        CustomerCampaign[]
 }
 
 model Branch {
@@ -134,6 +136,7 @@ model Customer {
   staffNotes CustomerNote[]
   activities CustomerActivity[]
   pointsLedgers PointsLedger[]
+  campaignReceipts CampaignReceipt[]
 
   @@unique([restaurant_id, branch_id, phone])
   @@index([restaurant_id, branch_id])
@@ -485,4 +488,56 @@ enum PointsTransactionType {
   REDEEM
   REFUND
   REVERSAL
+}
+
+// ─────────────────────────────────────────────
+// Customer Offers & Messaging System
+// ─────────────────────────────────────────────
+
+model CustomerCampaignTemplate {
+  id            String   @id @default(uuid())
+  restaurant_id String
+  name          String
+  message_body  String
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([restaurant_id])
+}
+
+model CustomerCampaign {
+  id                   String   @id @default(uuid())
+  restaurant_id        String
+  name                 String
+  message_template     String
+  segment              String   // "ALL", "LOYAL", "INACTIVE", "REGULAR", "NEVER_PURCHASED"
+  status               String   @default("DRAFT") // DRAFT, SENDING, COMPLETED
+  total_sent           Int      @default(0)
+  is_automated         Boolean  @default(false)
+  automation_condition String?  // e.g. "INACTIVE_30_DAYS"
+  automation_schedule  String?  // cron string
+  last_run_at          DateTime?
+  created_at           DateTime @default(now())
+  updated_at           DateTime @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  receipts   CampaignReceipt[]
+
+  @@index([restaurant_id])
+}
+
+model CampaignReceipt {
+  id             String   @id @default(uuid())
+  campaign_id    String
+  customer_id    String
+  sent_at        DateTime @default(now())
+
+  campaign CustomerCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  customer Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@unique([campaign_id, customer_id]) // Prevent duplicate sends
+  @@index([campaign_id])
+  @@index([customer_id])
 }

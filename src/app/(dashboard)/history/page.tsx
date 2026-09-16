@@ -100,8 +100,9 @@ export default function HistoryPage() {
           <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Source</label>
           <select value={source} onChange={(e) => setSource(e.target.value)} className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 bg-white">
             <option value="">All Sources</option>
-            <option value="WHATSAPP">📱 WhatsApp</option>
-            <option value="POS">💻 POS</option>
+            <option value="WHATSAPP,POS">📱 WhatsApp + 💻 POS</option>
+            <option value="WHATSAPP">📱 WhatsApp Only</option>
+            <option value="POS">💻 POS Only</option>
           </select>
         </div>
 

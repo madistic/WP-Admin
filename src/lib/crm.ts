@@ -50,14 +50,31 @@ export async function personalizeMessage(template: string, customerId: string, c
 
   if (message.includes("{{favorite_item}}")) {
     const favoriteItem = await getFavoriteItemForCustomer(customerId)
-    if (!favoriteItem) {
-      // If the template requires a favorite item but the customer doesn't have one, we return null to skip them
-      return null
+    if (favoriteItem) {
+      message = message.replace(/\{\{favorite_item\}\}/g, favoriteItem)
+    } else {
+      // If customer has no favorite item, gracefully remove the sentence containing the placeholder
+      const sentences = message.split(/([.!?\n]+)/)
+      let newMessage = ""
+      for (let i = 0; i < sentences.length; i += 2) {
+        const sentence = sentences[i]
+        const punctuation = sentences[i + 1] || ""
+        if (sentence && !sentence.includes("{{favorite_item}}")) {
+          newMessage += (newMessage.length > 0 ? sentence : sentence.trimStart()) + punctuation
+        }
+      }
+      message = newMessage.trim()
+
+      // If the original template didn't have a greeting and we removed the opening sentence,
+      // prepend a default friendly greeting.
+      const lower = message.toLowerCase()
+      if (!lower.includes("hi ") && !lower.includes("hello ") && customerName) {
+        message = `Hi ${customerName} 👋 ${message}`
+      }
     }
-    message = message.replace(/\{\{favorite_item\}\}/g, favoriteItem)
   }
 
-  return message
+  return message || null
 }
 
 /**

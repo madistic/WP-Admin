@@ -71,11 +71,11 @@ export async function POST(request: Request) {
         continue
       }
 
-      // Personalize message — returns null if {{favorite_item}} is required but unavailable
+      // Personalize message — removes {{favorite_item}} gracefully if unavailable
       const finalMessage = await personalizeMessage(message_template, customer.id, customer.name)
       if (!finalMessage) {
-        console.log(`[CRM] SKIP ${customerLabel}: insufficient order history for {{favorite_item}}`)
-        results.push({ customer_id: customer.id, name: customer.name, phone: customer.whatsapp_number, status: "SKIPPED", reason: "Message uses {{favorite_item}} but customer has insufficient order history (needs ≥2 orders of the same item)" })
+        console.log(`[CRM] SKIP ${customerLabel}: message was empty after personalization`)
+        results.push({ customer_id: customer.id, name: customer.name, phone: customer.whatsapp_number, status: "SKIPPED", reason: "Message was empty after removing unavailable placeholders" })
         skippedCount++
         continue
       }

@@ -26,7 +26,7 @@ export default function LoginForm() {
       setError("Invalid email or password")
       setLoading(false)
     } else {
-      router.push("/")
+      router.push("/orders")
       router.refresh()
     }
   }

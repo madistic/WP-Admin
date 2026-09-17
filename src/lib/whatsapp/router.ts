@@ -77,6 +77,7 @@ export interface ResolvedRestaurantInfo {
   whatsapp_catalog_id?: string | null
   is_open?: boolean
   logo_url?: string | null
+  minimum_order?: number | null
 }
 
 /**
@@ -1055,7 +1056,36 @@ export async function handleNativeOrderMessage(
     return { handled: true, responseText: failText, intent: "native_order_failed" }
   }
 
-  // ALL items validated successfully -> NOW safe to replace cart
+  // ─────────────────────────────────────────────────────────────────────
+  // MINIMUM ORDER VALUE CHECK (WhatsApp only — POS orders bypass this)
+  // Use item_price from the payload for an accurate pre-discount subtotal.
+  // ─────────────────────────────────────────────────────────────────────
+  const minimumOrder = typeof restaurant.minimum_order === "number" ? restaurant.minimum_order : 0
+  if (minimumOrder > 0) {
+    let cartSubtotal = 0
+    for (const itemPayload of orderPayload.productItems) {
+      if (itemPayload.item_price && itemPayload.item_price > 0) {
+        // item_price is already in the correct currency unit (INR)
+        cartSubtotal += itemPayload.item_price * (Number(itemPayload.quantity) || 1)
+      }
+    }
+
+    if (cartSubtotal > 0 && cartSubtotal < minimumOrder) {
+      const shortfall = (minimumOrder - cartSubtotal).toFixed(2)
+      const minOrderMsg =
+        `⚠️ Minimum order value is ₹${minimumOrder.toFixed(2)}.\n` +
+        `Your cart total is ₹${cartSubtotal.toFixed(2)}. Please add ₹${shortfall} more to continue.`
+      console.log(
+        `[Min Order] Rejected WhatsApp order from ${sender}: cart ₹${cartSubtotal}, min ₹${minimumOrder}`
+      )
+      if (restaurant.whatsapp_phone_number_id) {
+        await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, minOrderMsg)
+      }
+      return { handled: true, responseText: minOrderMsg, intent: "native_order_below_minimum" }
+    }
+  }
+
+  // ALL items validated and minimum order met -> NOW safe to replace cart
   await clearCart(restaurant.id, sender)
 
   for (const validItem of validItemsToInsert) {

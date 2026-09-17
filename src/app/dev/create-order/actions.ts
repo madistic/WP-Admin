@@ -48,7 +48,14 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
       const deliveryFee = payload.order_type === OrderType.HOME_DELIVERY ? restaurant.delivery_fee : 0
       const address = payload.order_type === OrderType.HOME_DELIVERY ? payload.address!.trim() : payload.order_type === OrderType.DINING ? `Dining Table ${payload.table_number!.trim()}` : "Takeaway"
       const orderNumber = `POS-${Date.now().toString(36).toUpperCase()}-${Math.floor(Math.random() * 1000)}`
-      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: PaymentMethod.COD, payment_status: PaymentStatus.PENDING, status: OrderStatus.NEW, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: OrderStatus.NEW, reason: "POS order created" } } } })
+      
+      // POS DINING and TAKEAWAY orders are completed immediately at the counter —
+      // they must NOT enter the WhatsApp active-order pipeline.
+      const isPosCompleted = payload.order_type === OrderType.DINING || payload.order_type === OrderType.TAKEAWAY
+      const finalStatus = isPosCompleted ? OrderStatus.DELIVERED : OrderStatus.NEW
+      const finalPaymentStatus = isPosCompleted ? PaymentStatus.PAID : PaymentStatus.PENDING
+      
+      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: PaymentMethod.COD, payment_status: finalPaymentStatus, status: finalStatus, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: finalStatus, reason: isPosCompleted ? "POS order completed at counter" : "POS order created" } } } })
     })
 
     revalidatePath("/orders")

@@ -56,6 +56,14 @@ interface Activity {
   created_at: string
 }
 
+interface PointsLedger {
+  id: string
+  type: "EARN" | "REDEEM" | "REFUND" | "REVERSAL"
+  points: number
+  reason: string
+  created_at: string
+}
+
 interface Customer360Data {
   id: string
   name: string
@@ -74,18 +82,23 @@ interface Customer360Data {
     segment: string
     firstOrderDate: string | null
     lastOrderDate: string | null
+    pointsBalance: number
+    pointsEarned: number
+    pointsRedeemed: number
+    pointsReversed: number
   }
   addresses: Address[]
   orders: Order[]
   staffNotes: StaffNote[]
   activities: Activity[]
+  pointsLedgers: PointsLedger[]
 }
 
 export default function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: customerId } = use(params)
   const [customer, setCustomer] = useState<Customer360Data | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<"overview" | "orders" | "addresses" | "activity" | "notes">("overview")
+  const [activeTab, setActiveTab] = useState<"overview" | "orders" | "addresses" | "activity" | "notes" | "points">("overview")
 
   // Selected Order Modal State
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
@@ -256,12 +269,16 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             {customer.metrics.favoriteCategory}
           </p>
         </div>
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 text-center">
+          <span className="text-xs font-semibold text-gray-400 uppercase">Points Balance</span>
+          <p className="text-xl font-bold text-green-600 mt-1">{customer.metrics.pointsBalance}</p>
+        </div>
       </div>
 
       {/* Navigation Tabs */}
       <div className="border-b border-gray-200 bg-white px-4 rounded-xl shadow-sm">
         <nav className="flex space-x-8 overflow-x-auto">
-          {(["overview", "orders", "addresses", "activity", "notes"] as const).map((tab) => (
+          {(["overview", "orders", "addresses", "activity", "notes", "points"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -521,6 +538,76 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                 <p className="text-xs text-gray-600 bg-gray-50 p-2 rounded">{selectedOrder.delivery_address_snapshot}</p>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {/* 6. POINTS TAB */}
+      {activeTab === "points" && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <h2 className="text-xl font-bold text-gray-900 mb-6">Points & Loyalty</h2>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+             <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100">
+               <p className="text-xs font-semibold text-indigo-600 uppercase">Balance</p>
+               <p className="text-2xl font-bold text-indigo-900 mt-1">{customer.metrics.pointsBalance}</p>
+             </div>
+             <div className="bg-green-50 p-4 rounded-lg border border-green-100">
+               <p className="text-xs font-semibold text-green-600 uppercase">Earned</p>
+               <p className="text-2xl font-bold text-green-900 mt-1">{customer.metrics.pointsEarned}</p>
+             </div>
+             <div className="bg-orange-50 p-4 rounded-lg border border-orange-100">
+               <p className="text-xs font-semibold text-orange-600 uppercase">Redeemed</p>
+               <p className="text-2xl font-bold text-orange-900 mt-1">{customer.metrics.pointsRedeemed}</p>
+             </div>
+             <div className="bg-red-50 p-4 rounded-lg border border-red-100">
+               <p className="text-xs font-semibold text-red-600 uppercase">Reversed</p>
+               <p className="text-2xl font-bold text-red-900 mt-1">{customer.metrics.pointsReversed}</p>
+             </div>
+          </div>
+
+          <h3 className="text-lg font-bold text-gray-900 mb-4">Transaction History</h3>
+          
+          <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 rounded-lg">
+            <table className="min-w-full divide-y divide-gray-300">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-xs font-semibold text-gray-900 sm:pl-6">Date</th>
+                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-gray-900">Type</th>
+                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-gray-900">Points</th>
+                  <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-gray-900">Reason</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 bg-white">
+                {customer.pointsLedgers?.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-8 text-center text-sm text-gray-500 italic">No points transactions found.</td>
+                  </tr>
+                ) : (
+                  customer.pointsLedgers?.map((tx) => (
+                    <tr key={tx.id} className="hover:bg-gray-50">
+                      <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm text-gray-900 sm:pl-6">
+                        {new Date(tx.created_at).toLocaleString()}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-4 text-sm font-semibold">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          tx.type === 'EARN' || tx.type === 'REFUND' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>
+                          {tx.type}
+                        </span>
+                      </td>
+                      <td className={`whitespace-nowrap px-3 py-4 text-sm font-bold ${
+                        tx.type === 'EARN' || tx.type === 'REFUND' ? 'text-green-600' : 'text-red-600'
+                      }`}>
+                        {tx.type === 'EARN' || tx.type === 'REFUND' ? '+' : '-'}{tx.points}
+                      </td>
+                      <td className="px-3 py-4 text-sm text-gray-500 max-w-xs truncate" title={tx.reason}>
+                        {tx.reason}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

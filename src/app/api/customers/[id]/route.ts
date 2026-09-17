@@ -44,6 +44,9 @@ export async function GET(
         activities: {
           orderBy: { created_at: "desc" },
         },
+        pointsLedgers: {
+          orderBy: { created_at: "desc" },
+        },
       },
     })
 
@@ -93,6 +96,24 @@ export async function GET(
 
     if (daysSinceLastOrder > 30 && completedOrdersCount > 0) segment = "Inactive"
 
+    // Points calculation
+    let pointsBalance = 0
+    let pointsEarned = 0
+    let pointsRedeemed = 0
+    let pointsReversed = 0
+    
+    for (const tx of customer.pointsLedgers) {
+      if (tx.type === "EARN" || tx.type === "REFUND") {
+        pointsBalance += tx.points
+        if (tx.type === "EARN") pointsEarned += tx.points
+        if (tx.type === "REFUND") pointsReversed += tx.points // Or consider refunds as reversed/refunded metrics
+      } else if (tx.type === "REDEEM" || tx.type === "REVERSAL") {
+        pointsBalance -= tx.points
+        if (tx.type === "REDEEM") pointsRedeemed += tx.points
+        if (tx.type === "REVERSAL") pointsReversed += tx.points
+      }
+    }
+
     return NextResponse.json({
       ...customer,
       metrics: {
@@ -102,6 +123,10 @@ export async function GET(
         aov,
         favoriteCategory,
         segment,
+        pointsBalance,
+        pointsEarned,
+        pointsRedeemed,
+        pointsReversed,
         firstOrderDate: customer.orders.length > 0 ? customer.orders[customer.orders.length - 1].created_at : null,
         lastOrderDate: customer.last_order_at,
       },

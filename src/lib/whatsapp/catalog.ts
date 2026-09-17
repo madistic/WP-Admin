@@ -486,6 +486,7 @@ export async function syncMenuItemToMetaCatalog(
     const isAvailable = item.is_available && item.is_active
 
     const productPayload: any = {
+      retailer_id: retailerId,
       name: item.name,
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",
@@ -668,6 +669,27 @@ export async function syncMenuItemToMetaCatalog(
     const finalScan = await checkProductExistsInMeta(catalogId, retailerId, item.name)
     if (!finalScan.exists) {
        console.warn(`[Meta Catalog Verification] Product '${item.name}' batch succeeded, but not found in immediate scan. It may take a few more seconds to appear. Proceeding to mark SYNCED since batch passed.`)
+    } else if (batchMethod === "UPDATE" && finalScan.metaProductId) {
+       // Fetch exact product fields to verify update actually reflected
+       const verifyUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${finalScan.metaProductId}?fields=availability,price,name,description`
+       try {
+         const vRes = await fetch(verifyUrl, { headers: { Authorization: `Bearer ${token}` } })
+         const vData = await vRes.json()
+         
+         const expectedPrice = String(Math.round(item.price * 100))
+         const expectedAvailability = isAvailable ? "in stock" : "out of stock"
+         
+         if (vData.availability !== expectedAvailability || vData.price !== expectedPrice) {
+            console.warn(`[Meta Catalog Verification] Product '${item.name}' update failed to reflect. Expected availability: ${expectedAvailability}, Price: ${expectedPrice}. Got: ${vData.availability}, ${vData.price}`)
+            await prisma.menuItem.update({
+              where: { id: menuItemId },
+              data: { meta_sync_status: "FAILED", meta_sync_error: "Update did not reflect on Meta (cache/delay issue)" }
+            })
+            return { success: false, error: "Update did not reflect on Meta immediately" }
+         }
+       } catch (e: any) {
+         console.warn(`[Meta Catalog Verification] Error fetching product fields: ${e.message}`)
+       }
     }
 
     // -----------------------------------------------------------------------

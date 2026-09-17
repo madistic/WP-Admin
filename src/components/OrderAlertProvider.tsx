@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { Toaster, toast } from "react-hot-toast"
 import { useRouter } from "next/navigation"
 
@@ -9,6 +9,46 @@ export default function OrderAlertProvider() {
   // Only alert for orders that arrive AFTER the dashboard is loaded.
   const [sinceTime] = useState<string>(new Date().toISOString())
   const alertedOrderIds = useRef<Set<string>>(new Set())
+  
+  const [audioEnabled, setAudioEnabled] = useState(false)
+
+  useEffect(() => {
+    // Load preference from localStorage
+    const stored = localStorage.getItem("resto_audio_enabled")
+    if (stored === "true") {
+      setAudioEnabled(true)
+    }
+  }, [])
+
+  const unlockAudio = useCallback(() => {
+    localStorage.setItem("resto_audio_enabled", "true")
+    setAudioEnabled(true)
+    // Play a silent sound to unlock autoplay
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      ctx.resume()
+    } catch (_) {}
+  }, [])
+
+  const playNotification = useCallback(() => {
+    if (!audioEnabled) return
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = "sine"
+      osc.frequency.setValueAtTime(880, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.15)
+      gain.gain.setValueAtTime(0.6, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.4)
+    } catch (e) {
+      console.warn("[OrderAlertProvider] Could not play notification sound:", e)
+    }
+  }, [audioEnabled])
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout
@@ -18,10 +58,11 @@ export default function OrderAlertProvider() {
         const res = await fetch(`/api/orders/latest?since=${encodeURIComponent(sinceTime)}`)
         if (res.ok) {
           const newOrders: any[] = await res.json()
+          let hasNew = false
           newOrders.forEach((order) => {
-            if (!alertedOrderIds.current.has(order.id)) {
+            if (!alertedOrderIds.current.has(order.id) && order.source !== "POS") {
               alertedOrderIds.current.add(order.id)
-              
+              hasNew = true
               toast((t) => (
                 <div className="flex flex-col gap-2 cursor-pointer" onClick={() => {
                   toast.dismiss(t.id)
@@ -50,6 +91,9 @@ export default function OrderAlertProvider() {
               })
             }
           })
+          if (hasNew) {
+            playNotification()
+          }
         }
       } catch (err) {
         // Ignore network errors in polling silently
@@ -61,11 +105,28 @@ export default function OrderAlertProvider() {
     pollLatestOrders()
 
     return () => clearTimeout(timeoutId)
-  }, [sinceTime, router])
+  }, [sinceTime, router, playNotification])
 
   return (
     <>
       <Toaster />
+      {!audioEnabled && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl shadow-lg px-4 py-3 max-w-sm">
+          <div className="flex items-start gap-3">
+            <span className="text-xl">🔔</span>
+            <div>
+              <p className="font-semibold text-amber-900 text-sm">Enable Notification Sounds</p>
+              <p className="text-xs text-amber-700 mt-0.5">Hear a chime across the portal when a new order arrives.</p>
+            </div>
+          </div>
+          <button
+            onClick={unlockAudio}
+            className="ml-4 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap"
+          >
+            Enable
+          </button>
+        </div>
+      )}
     </>
   )
 }

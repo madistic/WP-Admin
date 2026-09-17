@@ -1057,6 +1057,18 @@ export async function handleNativeOrderMessage(
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  // UPDATE CART WITH SUBMITTED ITEMS (Even if below minimum, we save their progress)
+  // ─────────────────────────────────────────────────────────────────────
+  await clearCart(restaurant.id, sender)
+
+  for (const validItem of validItemsToInsert) {
+    await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity, variantId: validItem.variantId })
+  }
+
+  // Set cart step so next action goes into checkout (if they pass the check)
+  await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
+
+  // ─────────────────────────────────────────────────────────────────────
   // MINIMUM ORDER VALUE CHECK (WhatsApp only — POS orders bypass this)
   // Use item_price from the payload for an accurate pre-discount subtotal.
   // ─────────────────────────────────────────────────────────────────────
@@ -1080,20 +1092,17 @@ export async function handleNativeOrderMessage(
       )
       if (restaurant.whatsapp_phone_number_id) {
         await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, minOrderMsg)
+        
+        // Immediately provide "View/Add Items" using native Meta Catalog
+        if (catalogId) {
+          const ctaText = "View Menu & Add Items"
+          const bodyText = `Click below to add more items to your order.`
+          await sendWhatsAppCatalogMessage(restaurant.whatsapp_phone_number_id, sender, bodyText, ctaText, catalogId)
+        }
       }
       return { handled: true, responseText: minOrderMsg, intent: "native_order_below_minimum" }
     }
   }
-
-  // ALL items validated and minimum order met -> NOW safe to replace cart
-  await clearCart(restaurant.id, sender)
-
-  for (const validItem of validItemsToInsert) {
-    await addToCart(restaurant.id, sender, validItem.menuItemId, { quantity: validItem.quantity, variantId: validItem.variantId })
-  }
-
-  // Set cart step so next action goes into checkout
-  await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
 
   const cleanPhoneO = sender.startsWith("+") ? sender : `+${sender}`
   const branchId = await getDefaultBranchId(restaurant.id)

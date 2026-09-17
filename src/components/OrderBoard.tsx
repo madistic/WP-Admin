@@ -53,57 +53,11 @@ export default function OrderBoard() {
   // Drawer Inspection
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
 
-  // New Order Notification Sound
-  const prevNewOrderIdsRef = useRef<Set<string>>(new Set())
-  const audioUnlockedRef = useRef(false)
-  const [showAudioBanner, setShowAudioBanner] = useState(true)
-
-  const playNotification = useCallback(() => {
-    if (!audioUnlockedRef.current) return
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.type = "sine"
-      osc.frequency.setValueAtTime(880, ctx.currentTime)
-      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.15)
-      gain.gain.setValueAtTime(0.6, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
-      osc.start(ctx.currentTime)
-      osc.stop(ctx.currentTime + 0.4)
-    } catch (e) {
-      console.warn("[OrderBoard] Could not play notification sound:", e)
-    }
-  }, [])
-
-  const unlockAudio = useCallback(() => {
-    audioUnlockedRef.current = true
-    setShowAudioBanner(false)
-    // Play a silent sound to unlock autoplay
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-      ctx.resume()
-    } catch (_) {}
-  }, [])
-
   const fetchOrders = async () => {
     try {
       const res = await fetch("/api/orders")
       if (res.ok) {
         const data: Order[] = await res.json()
-        // Detect genuinely new orders (status === NEW that weren't there before)
-        const currentNewIds = new Set(data.filter(o => o.status === "NEW").map(o => o.id))
-        const isFirstLoad = prevNewOrderIdsRef.current.size === 0 && data.length > 0
-        if (!isFirstLoad) {
-          let hasNew = false
-          currentNewIds.forEach(id => {
-            if (!prevNewOrderIdsRef.current.has(id)) hasNew = true
-          })
-          if (hasNew) playNotification()
-        }
-        prevNewOrderIdsRef.current = currentNewIds
         setOrders(data)
       }
     } catch (e) {
@@ -184,6 +138,9 @@ export default function OrderBoard() {
 
   // Status Tab & Search & Amount Filter
   const filteredOrders = dateFilteredOrders.filter((o) => {
+    // 0. Exclude POS orders
+    if (o.source === "POS") return false
+
     // 1. Status Tab
     if (activeTab !== "ALL" && o.status !== activeTab) return false
 
@@ -221,30 +178,6 @@ export default function OrderBoard() {
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-      {/* Audio Unlock Banner — browsers require a user gesture before playing sounds */}
-      {showAudioBanner && (
-        <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-          <div className="flex items-center gap-2 text-sm text-amber-800">
-            <span>🔔</span>
-            <span className="font-semibold">Enable order notification sounds</span>
-            <span className="text-amber-600 text-xs">— you'll hear a chime when a new order arrives</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={unlockAudio}
-              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold rounded-lg transition-colors"
-            >
-              Enable Sounds 🔔
-            </button>
-            <button
-              onClick={() => setShowAudioBanner(false)}
-              className="text-amber-400 hover:text-amber-600 text-lg leading-none"
-              title="Dismiss"
-            >×</button>
-          </div>
-        </div>
-      )}
-
       {/* 1. Date Navigation */}
       <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex items-center gap-3">

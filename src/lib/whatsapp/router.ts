@@ -692,7 +692,7 @@ export async function handleOpenCatalog(
   sender: string
 ): Promise<{ handled: boolean; responseText: string; intent: string }> {
   await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
-  const responseText = `Here is our menu:`
+  const responseText = `🍽️ Here is our menu 👇`
   const catalogId = restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
 
   if (!restaurant.whatsapp_phone_number_id) {

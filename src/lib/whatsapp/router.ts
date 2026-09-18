@@ -700,95 +700,31 @@ export async function handleOpenCatalog(
   }
 
   if (catalogId) {
-    const { checkProductExistsInMeta, syncRestaurantCatalog } = await import("./catalog")
-    let items = await getWhatsAppItems(restaurant.id)
-
-    const dbSyncedItems = items.filter(
-      (i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== ""
+    const { sendWhatsAppCatalogMessage, sendWhatsAppInteractiveButtons } = await import("./client")
+    
+    // Send the native Meta Catalog message (View Catalogue button)
+    await sendWhatsAppCatalogMessage(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      catalogId
     )
 
-    let verifiedRetailerId: string | null = null
+    // Always show Track Order alongside the menu
+    await sendWhatsAppInteractiveButtons(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      "Need to check an existing order?",
+      [{ id: "action_track_order_prompt", title: "📦 Track Order" }]
+    )
 
-    for (const candidate of dbSyncedItems) {
-      const liveCheck = await checkProductExistsInMeta(catalogId, candidate.meta_product_sku!, candidate.name)
-      if (liveCheck.exists) {
-        verifiedRetailerId = candidate.meta_product_sku!
-        break
-      }
-    }
-
-    if (!verifiedRetailerId) {
-      const hasAttemptedSync = items.some((i) => i.meta_sync_status !== null)
-
-      if (!hasAttemptedSync && items.length > 0) {
-        await syncRestaurantCatalog(restaurant.id)
-        items = await getWhatsAppItems(restaurant.id)
-
-        const refreshedItems = items.filter(
-          (i) => i.meta_sync_status === "SYNCED" && i.meta_product_sku && i.meta_product_sku.trim() !== ""
-        )
-        for (const candidate of refreshedItems) {
-          const liveCheck = await checkProductExistsInMeta(catalogId, candidate.meta_product_sku!, candidate.name)
-          if (liveCheck.exists) {
-            verifiedRetailerId = candidate.meta_product_sku!
-            break
-          }
-        }
-      }
-    }
-
-    if (verifiedRetailerId) {
-      const { getMenuCategories } = await import("./menu")
-      const categories = await getMenuCategories(restaurant.id)
-      
-      const sections: Array<{ title: string; product_items: Array<{ product_retailer_id: string }> }> = []
-      let totalAdded = 0
-      
-      for (const cat of categories) {
-        if (sections.length >= 10 || totalAdded >= 30) break;
-        
-        const catItems = dbSyncedItems.filter(i => i.category_id === cat.id)
-        if (catItems.length === 0) continue;
-
-        const productItems = []
-        for (const item of catItems) {
-          if (totalAdded >= 30) break;
-          productItems.push({ product_retailer_id: item.meta_product_sku! })
-          totalAdded++
-        }
-
-        if (productItems.length > 0) {
-          sections.push({
-            title: cat.name.slice(0, 24),
-            product_items: productItems
-          })
-        }
-      }
-      
-      const { sendWhatsAppMultiProductList, sendWhatsAppInteractiveButtons } = await import("./client")
-      await sendWhatsAppMultiProductList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        catalogId,
-        sections
-      )
-
-      // Always show Track Order alongside the menu
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        "Need to check an existing order?",
-        [{ id: "action_track_order_prompt", title: "📦 Track Order" }]
-      )
-
-      return { handled: true, responseText, intent: "open_catalog" }
-    }
-
-    const errorText = `⚠️ Our menu is currently being set up. Please try again in a few moments or contact us directly.`
-    await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, errorText)
-    return { handled: true, responseText: errorText, intent: "open_catalog_error" }
+    return { handled: true, responseText, intent: "open_catalog" }
   }
+
+  const errorText = `⚠️ Our menu is currently being set up. Please try again in a few moments or contact us directly.`
+  const { sendWhatsAppTextMessage } = await import("./client")
+  await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, errorText)
+  return { handled: true, responseText: errorText, intent: "open_catalog_error" }
 
   return await handleInitialGreeting(restaurant, sender)
 }
@@ -1955,6 +1891,18 @@ export async function handleFinalOrderCreation(
         responseText,
         [{ id: "action_track_order_prompt", title: "📦 Track Order" }]
       )
+
+      // Send catalog so they can continue shopping
+      const catalogId = restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+      if (catalogId) {
+        const { sendWhatsAppCatalogMessage } = await import("./client")
+        await sendWhatsAppCatalogMessage(
+          restaurant.whatsapp_phone_number_id,
+          sender,
+          "Would you like to continue browsing our menu?",
+          catalogId
+        )
+      }
     }
   }
 

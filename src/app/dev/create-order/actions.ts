@@ -149,3 +149,88 @@ export async function appendItemsToPosOrder(payload: { orderId: string; items: P
     return { error: error instanceof Error ? error.message : "Failed to append items" }
   }
 }
+
+export async function deletePosOrder(orderId: string) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) return { error: "Unauthorized" }
+
+    // Only allow deleting IN_PROCESS POS sessions
+    const order = await prisma.order.findUnique({
+      where: { id: orderId, restaurant_id: session.user.restaurant_id },
+      select: { status: true, source: true }
+    })
+    if (!order) return { error: "Session not found." }
+    if (order.source !== "POS") return { error: "Only POS sessions can be deleted." }
+    if (order.status !== "IN_PROCESS") return { error: "Only open POS sessions can be deleted." }
+
+    await prisma.$transaction([
+      prisma.orderStatusHistory.deleteMany({ where: { order_id: orderId } }),
+      prisma.orderItem.deleteMany({ where: { order_id: orderId } }),
+      prisma.order.delete({ where: { id: orderId } }),
+    ])
+
+    revalidatePath("/orders")
+    revalidatePath("/history")
+    revalidatePath("/dev/create-order")
+    return { success: true }
+  } catch (error) {
+    console.error("Delete POS Order Error:", error)
+    return { error: "Failed to delete POS session." }
+  }
+}
+
+export async function updatePosOrderItem(payload: {
+  orderId: string
+  orderItemId: string
+  action: "set_quantity" | "remove"
+  quantity?: number
+}) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) return { error: "Unauthorized" }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Guard: only allow edits to open IN_PROCESS POS sessions
+      const order = await tx.order.findUnique({
+        where: { id: payload.orderId, restaurant_id: session.user.restaurant_id, status: OrderStatus.IN_PROCESS },
+        include: { items: true }
+      })
+      if (!order) throw new Error("Active POS session not found or already completed.")
+
+      const existingItem = order.items.find(i => i.id === payload.orderItemId)
+      if (!existingItem) throw new Error("Item not found in session.")
+
+      let newItemLineTotal = existingItem.line_total
+      const oldItemLineTotal = existingItem.line_total
+
+      if (payload.action === "remove") {
+        await tx.orderItem.delete({ where: { id: payload.orderItemId } })
+        newItemLineTotal = 0
+      } else if (payload.action === "set_quantity") {
+        const qty = payload.quantity ?? 1
+        if (!Number.isInteger(qty) || qty < 1) throw new Error("Invalid quantity.")
+        newItemLineTotal = existingItem.unit_price_snapshot * qty
+        await tx.orderItem.update({
+          where: { id: payload.orderItemId },
+          data: { quantity: qty, line_total: newItemLineTotal }
+        })
+      }
+
+      const delta = newItemLineTotal - oldItemLineTotal
+      const newSubtotal = order.subtotal + delta
+      const newTotal = order.total + delta
+
+      return tx.order.update({
+        where: { id: order.id },
+        data: { subtotal: newSubtotal, total: newTotal }
+      })
+    })
+
+    revalidatePath("/dev/create-order")
+    return { success: true }
+  } catch (error) {
+    console.error("Update POS Order Item Error:", error)
+    return { error: error instanceof Error ? error.message : "Failed to update item." }
+  }
+}

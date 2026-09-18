@@ -283,7 +283,7 @@ export default function OrderBoard() {
           { id: "IN_PROCESS", label: "In Process", count: dateFilteredOrders.filter((o) => o.status === "IN_PROCESS").length },
           { id: "OUT_FOR_DELIVERY", label: "Out for Delivery", count: dateFilteredOrders.filter((o) => o.status === "OUT_FOR_DELIVERY").length },
           { id: "DELIVERED", label: "Delivered", count: dateFilteredOrders.filter((o) => o.status === "DELIVERED").length },
-          { id: "CANCELLED", label: "Cancelled", count: dateFilteredOrders.filter((o) => o.status === "CANCELLED").length },
+          // { id: "CANCELLED", label: "Cancelled", count: dateFilteredOrders.filter((o) => o.status === "CANCELLED").length },
           { id: "REJECTED", label: "Rejected", count: dateFilteredOrders.filter((o) => o.status === "REJECTED").length },
         ].map((tab) => (
           <button

@@ -1,6 +1,6 @@
 import Link from "next/link"
 import prisma from "@/lib/prisma"
-import { createTestOrder, appendItemsToPosOrder, completePosOrder } from "./actions"
+import { createTestOrder, appendItemsToPosOrder, completePosOrder, deletePosOrder, updatePosOrderItem } from "./actions"
 import DevCreateOrderForm from "./DevCreateOrderForm"
 
 export const dynamic = "force-dynamic"
@@ -53,6 +53,8 @@ export default async function DevCreateOrderPage() {
           createOrderAction={createTestOrder} 
           appendItemsAction={appendItemsToPosOrder}
           completeOrderAction={completePosOrder}
+          deleteSessionAction={deletePosOrder}
+          updateItemAction={updatePosOrderItem}
         />
       </div>
     </div>

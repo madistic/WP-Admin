@@ -9,7 +9,7 @@ export default function OrderAlertProvider() {
   // Only alert for orders that arrive AFTER the dashboard is loaded.
   const [sinceTime] = useState<string>(new Date().toISOString())
   const alertedOrderIds = useRef<Set<string>>(new Set())
-  
+
   const [audioEnabled, setAudioEnabled] = useState(false)
 
   useEffect(() => {
@@ -27,7 +27,7 @@ export default function OrderAlertProvider() {
     try {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
       ctx.resume()
-    } catch (_) {}
+    } catch (_) { }
   }, [])
 
   const playNotification = useCallback(() => {
@@ -66,7 +66,7 @@ export default function OrderAlertProvider() {
               toast((t) => (
                 <div className="flex flex-col gap-2 cursor-pointer" onClick={() => {
                   toast.dismiss(t.id)
-                  router.push("/dashboard")
+                  router.push("/orders")
                 }}>
                   <div className="flex items-center gap-2">
                     <span className="text-xl">🚨</span>
@@ -76,7 +76,7 @@ export default function OrderAlertProvider() {
                     {order.customer_name_snapshot} placed an order for ₹{order.total.toFixed(2)}
                   </p>
                   <button className="mt-1 text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-md hover:bg-indigo-100 self-start">
-                    View in Dashboard
+                    View in Order's Tab
                   </button>
                 </div>
               ), {

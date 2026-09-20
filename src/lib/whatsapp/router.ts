@@ -4,6 +4,7 @@ import {
   getWhatsAppItemDetails,
   formatWhatsAppProductDetailText,
 } from "./adapter"
+import { sendPushToRestaurant } from "@/lib/webpush"
 import {
   sendWhatsAppTextMessage,
   sendWhatsAppInteractiveButtons,
@@ -1912,6 +1913,15 @@ export async function handleFinalOrderCreation(
     lines.push(`Total: *₹${result.total?.toFixed(2)}*`)
     lines.push(`\nWe'll prepare your order shortly. 🍽️`)
     responseText = lines.join("\n")
+
+    // Fire push notification to restaurant (works even when dashboard tab is closed)
+    sendPushToRestaurant(restaurant.id, {
+      title: `🚨 New WhatsApp Order #${result.orderNumber}`,
+      body: `₹${result.total?.toFixed(2)} — Tap to view`,
+      tag: `order-${result.orderNumber}`,
+      url: "/orders",
+      requireInteraction: true,
+    }).catch((err) => console.warn("[Router] Push notification failed:", err))
 
     if (restaurant.whatsapp_phone_number_id) {
       await sendWhatsAppInteractiveButtons(

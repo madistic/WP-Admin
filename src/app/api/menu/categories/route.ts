@@ -2,8 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
-
+import { syncMenuItemWithVariants, ensureMetaProductSet } from "@/lib/whatsapp/catalog"
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions)
@@ -34,6 +33,13 @@ export async function POST(request: Request) {
         sort_order: count,
       },
     })
+
+    const restaurant = await prisma.restaurant.findUnique({ where: { id: restaurantId } })
+    const catalogId = restaurant?.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+    const token = process.env.WHATSAPP_ACCESS_TOKEN
+    if (catalogId && token) {
+      await ensureMetaProductSet(catalogId, category.name, token)
+    }
 
     return NextResponse.json(category, { status: 201 })
   } catch (error: any) {
@@ -84,6 +90,13 @@ export async function PUT(request: Request) {
     })
 
     if (name !== undefined && name.trim() !== existing.name) {
+      const restaurant = await prisma.restaurant.findUnique({ where: { id: restaurantId } })
+      const catalogId = restaurant?.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+      const token = process.env.WHATSAPP_ACCESS_TOKEN
+      if (catalogId && token) {
+        await ensureMetaProductSet(catalogId, updated.name, token)
+      }
+
       const items = await prisma.menuItem.findMany({
         where: { category_id: id, is_active: true, deleted_at: null },
         select: { id: true },

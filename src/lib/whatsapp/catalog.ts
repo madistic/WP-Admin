@@ -220,7 +220,7 @@ async function verifyBatchHandle(
  * Ensures a Product Set exists in Meta Catalog for the given category name.
  * Uses custom_label_0 to filter products.
  */
-async function ensureMetaProductSet(
+export async function ensureMetaProductSet(
   catalogId: string,
   categoryName: string,
   token: string
@@ -559,7 +559,7 @@ export async function syncMenuItemToMetaCatalog(
       brand: item.restaurant.name,
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
-      custom_label_0: item.category?.name || "Uncategorized",
+      custom_label_0: item.deleted_at ? "Deleted" : (item.category?.name || "Uncategorized"),
     }
 
 

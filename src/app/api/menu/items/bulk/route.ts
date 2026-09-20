@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
-import { deleteProductFromMetaCatalog } from "@/lib/whatsapp/catalog"
+import { deleteProductFromMetaCatalog, syncMenuItemToMetaCatalog } from "@/lib/whatsapp/catalog"
 
 export async function POST(request: Request) {
   try {
@@ -57,6 +57,7 @@ export async function POST(request: Request) {
 
       let archivedCount = 0
       let deletedCount = 0
+      let referencedIds: string[] = []
       await prisma.$transaction(async (tx) => {
         await tx.categoryItemSelection.deleteMany({ where: { menu_item_id: { in: validIds } } })
         await tx.whatsAppCartItem.deleteMany({ where: { menu_item_id: { in: validIds } } })
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
           select: { menu_item_id: true },
           distinct: ["menu_item_id"],
         })
-        const referencedIds = referencedItems.map((item) => item.menu_item_id)
+        referencedIds = referencedItems.map((item) => item.menu_item_id)
         const unusedIds = validIds.filter((id) => !referencedIds.includes(id))
 
         if (referencedIds.length > 0) {
@@ -95,19 +96,23 @@ export async function POST(request: Request) {
         const catalogId = item.restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
         if (!item.meta_product_sku || !catalogId) return []
 
-        const results = await Promise.all([
-          deleteProductFromMetaCatalog(catalogId, item.meta_product_sku, item.name),
-          ...item.variants.map((variant) => deleteProductFromMetaCatalog(
-            catalogId,
-            `${item.meta_product_sku}__var__${variant.id}`,
-            `${item.name} [${variant.name}]`
-          )),
-        ])
-        return results
+        if (referencedIds.includes(item.id)) {
+          return [await syncMenuItemToMetaCatalog(item.id)]
+        } else {
+          const deletionResults = await Promise.all([
+            deleteProductFromMetaCatalog(catalogId, item.meta_product_sku, item.name),
+            ...item.variants.map((variant) => deleteProductFromMetaCatalog(
+              catalogId,
+              `${item.meta_product_sku}__var__${variant.id}`,
+              `${item.name} [${variant.name}]`
+            )),
+          ])
+          return deletionResults
+        }
       }))
-      const catalogErrors = catalogResults.flatMap((result) => {
-        if (result.status === "rejected") return [result.reason instanceof Error ? result.reason.message : "Catalog cleanup failed"]
-        return result.value.filter((result) => !result.success).map((result) => result.error || "Catalog cleanup failed")
+      const catalogErrors = catalogResults.flatMap((res) => {
+        if (res.status === "rejected") return [res.reason instanceof Error ? res.reason.message : "Catalog cleanup failed"]
+        return res.value.filter((r: any) => !r.success).map((r: any) => r.error || "Catalog cleanup failed")
       })
 
       return NextResponse.json({

@@ -51,6 +51,7 @@ export async function getMenuCategories(restaurantId: string) {
             where: {
               is_active: true,
               is_available: true,
+              deleted_at: null,
             },
           },
         },

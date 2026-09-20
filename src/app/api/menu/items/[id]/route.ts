@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma"
 import {
   syncMenuItemWithVariants,
   deleteProductFromMetaCatalog,
+  syncMenuItemToMetaCatalog,
 } from "@/lib/whatsapp/catalog"
 
 export async function PUT(
@@ -128,19 +129,27 @@ export async function DELETE(
     })
 
     if (retailerId && catalogId) {
-      const productResult = await deleteProductFromMetaCatalog(catalogId, retailerId, existing.name)
-      if (!productResult.success) {
-        console.warn(`[Meta Catalog Delete] Failed for '${existing.name}': ${productResult.error}`)
-      }
+      if (archived) {
+        // Sync the soft-deleted item to Meta to remove it from the collection via custom_label_0
+        const syncResult = await syncMenuItemToMetaCatalog(itemId)
+        if (!syncResult.success) {
+          console.warn(`[Meta Catalog Sync] Failed to sync soft-deleted item '${existing.name}': ${syncResult.error}`)
+        }
+      } else {
+        const productResult = await deleteProductFromMetaCatalog(catalogId, retailerId, existing.name)
+        if (!productResult.success) {
+          console.warn(`[Meta Catalog Delete] Failed for '${existing.name}': ${productResult.error}`)
+        }
 
-      for (const variant of existing.variants) {
-        const variantResult = await deleteProductFromMetaCatalog(
-          catalogId,
-          `${retailerId}__var__${variant.id}`,
-          `${existing.name} [${variant.name}]`
-        )
-        if (!variantResult.success) {
-          console.warn(`[Meta Catalog Delete] Failed for variant '${variant.name}': ${variantResult.error}`)
+        for (const variant of existing.variants) {
+          const variantResult = await deleteProductFromMetaCatalog(
+            catalogId,
+            `${retailerId}__var__${variant.id}`,
+            `${existing.name} [${variant.name}]`
+          )
+          if (!variantResult.success) {
+            console.warn(`[Meta Catalog Delete] Failed for variant '${variant.name}': ${variantResult.error}`)
+          }
         }
       }
     }

@@ -33,7 +33,11 @@ export async function GET() {
       where: { restaurant_id: restaurantId },
       orderBy: { sort_order: "asc" },
       include: {
-        _count: { select: { items: true } },
+        _count: { 
+          select: { 
+            items: { where: { deleted_at: null } } 
+          } 
+        },
       },
     })
 

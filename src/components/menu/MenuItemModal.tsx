@@ -319,7 +319,7 @@ export default function MenuItemModal({
             </div>
           )}
 
-          {/* Rule 8: Variants Builder */}
+          {/* FUTURE FEATURES
           <div className="border-t pt-4">
             <div className="flex justify-between items-center mb-2">
               <span className="text-sm font-semibold text-gray-900">Item Variants (Optional)</span>
@@ -372,7 +372,6 @@ export default function MenuItemModal({
             )}
           </div>
 
-          {/* Add-ons Builder */}
           <div className="border-t pt-4">
             <div className="flex justify-between items-center mb-2">
               <span className="text-sm font-semibold text-gray-900">Add-ons / Modifiers (Optional)</span>
@@ -424,6 +423,7 @@ export default function MenuItemModal({
               </div>
             )}
           </div>
+          */}
 
           <div className="flex justify-end space-x-3 pt-4 border-t sticky bottom-0 bg-white">
             <button

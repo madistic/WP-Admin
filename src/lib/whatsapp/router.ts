@@ -182,6 +182,28 @@ async function processIncomingWhatsAppMessageUnlocked(
   const sender = message.from
   const rawText = (message.textBody || "").trim()
 
+  const cleanPhone = sender.startsWith("+") ? sender : `+${sender}`
+  const existingCart = await prisma.whatsAppCart.findFirst({
+    where: {
+      restaurant_id: restaurant.id,
+      customer_whatsapp_number: cleanPhone,
+    }
+  })
+
+  const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000
+  if (existingCart && Date.now() - existingCart.updated_at.getTime() > SESSION_TIMEOUT_MS) {
+    await clearCart(restaurant.id, sender)
+    
+    if (message.type === "interactive" && message.interactiveId !== "action_initial_greeting") {
+      const responseText = "⏰ This message is too old. Please start a new order."
+      if (restaurant.whatsapp_phone_number_id) {
+        const { sendWhatsAppTextMessage } = await import("./client")
+        await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
+      }
+      return { handled: true, responseText, intent: "session_expired_interactive" }
+    }
+  }
+
   // Handle native Meta WhatsApp Order Payload message type
   if (message.type === "order" && message.orderPayload) {
     return await handleNativeOrderMessage(restaurant, sender, message.orderPayload)
@@ -700,15 +722,48 @@ export async function handleOpenCatalog(
   }
 
   if (catalogId) {
-    const { sendWhatsAppCatalogMessage, sendWhatsAppInteractiveButtons } = await import("./client")
+    const { sendWhatsAppMultiProductList, sendWhatsAppInteractiveButtons, sendWhatsAppCatalogMessage } = await import("./client")
     
-    // Send the native Meta Catalog message (View Catalogue button)
-    await sendWhatsAppCatalogMessage(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      catalogId
-    )
+    const categories = await getWhatsAppCategories(restaurant.id)
+    const items = await getWhatsAppItems(restaurant.id)
+    
+    const sections: Array<{ title: string; product_items: Array<{ product_retailer_id: string }> }> = []
+    let totalAdded = 0
+    
+    for (const cat of categories) {
+      const catItems = items.filter(i => i.category_id === cat.id && i.meta_sync_status === "SYNCED")
+      if (catItems.length === 0) continue
+      
+      const product_items: Array<{ product_retailer_id: string }> = []
+      for (const item of catItems) {
+        if (totalAdded >= 30) break
+        product_items.push({ product_retailer_id: item.meta_product_sku || item.id })
+        totalAdded++
+      }
+      
+      if (product_items.length > 0) {
+        sections.push({ title: cat.title, product_items })
+      }
+      if (totalAdded >= 30) break
+    }
+
+    if (sections.length > 0) {
+      await sendWhatsAppMultiProductList(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        catalogId,
+        sections,
+        { headerText: "Browse Menu" }
+      )
+    } else {
+      await sendWhatsAppCatalogMessage(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        catalogId
+      )
+    }
 
     // Always show Track Order alongside the menu
     await sendWhatsAppInteractiveButtons(
@@ -738,13 +793,48 @@ export async function handleOpenCatalogCart(
   const responseText = "You can update your cart items below:"
 
   if (restaurant.whatsapp_phone_number_id && catalogId) {
-    const { sendWhatsAppCatalogMessage } = await import("./client")
-    await sendWhatsAppCatalogMessage(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      catalogId
-    )
+    const { sendWhatsAppMultiProductList, sendWhatsAppCatalogMessage } = await import("./client")
+    
+    const categories = await getWhatsAppCategories(restaurant.id)
+    const items = await getWhatsAppItems(restaurant.id)
+    
+    const sections: Array<{ title: string; product_items: Array<{ product_retailer_id: string }> }> = []
+    let totalAdded = 0
+    
+    for (const cat of categories) {
+      const catItems = items.filter(i => i.category_id === cat.id && i.meta_sync_status === "SYNCED")
+      if (catItems.length === 0) continue
+      
+      const product_items: Array<{ product_retailer_id: string }> = []
+      for (const item of catItems) {
+        if (totalAdded >= 30) break
+        product_items.push({ product_retailer_id: item.meta_product_sku || item.id })
+        totalAdded++
+      }
+      
+      if (product_items.length > 0) {
+        sections.push({ title: cat.title, product_items })
+      }
+      if (totalAdded >= 30) break
+    }
+
+    if (sections.length > 0) {
+      await sendWhatsAppMultiProductList(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        catalogId,
+        sections,
+        { headerText: "Update Cart" }
+      )
+    } else {
+      await sendWhatsAppCatalogMessage(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        responseText,
+        catalogId
+      )
+    }
     return { handled: true, responseText, intent: "open_catalog_cart" }
   }
   return await handleInitialGreeting(restaurant, sender)

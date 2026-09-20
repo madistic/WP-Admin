@@ -217,6 +217,69 @@ async function verifyBatchHandle(
 // ---------------------------------------------------------------------------
 
 /**
+ * Ensures a Product Set exists in Meta Catalog for the given category name.
+ * Uses custom_label_0 to filter products.
+ */
+async function ensureMetaProductSet(
+  catalogId: string,
+  categoryName: string,
+  token: string
+): Promise<void> {
+  if (!categoryName || categoryName === "Food & Beverages") return
+
+  // First, check if a product set with this name already exists
+  const listUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/product_sets?fields=id,name,filter&limit=100`
+  
+  try {
+    const res = await fetch(listUrl, { headers: { Authorization: `Bearer ${token}` } })
+    const data = await res.json()
+    
+    if (res.ok) {
+      const sets = data?.data || []
+      const existing = sets.find((s: any) => s.name === categoryName)
+      if (existing) {
+        return // Set already exists
+      }
+    } else {
+      console.warn(`[Meta Catalog Set] Failed to list product sets: ${data?.error?.message}`)
+    }
+  } catch (e: any) {
+    console.warn(`[Meta Catalog Set] Exception listing product sets: ${e.message}`)
+  }
+
+  // Create the Product Set since it doesn't exist
+  console.log(`[Meta Catalog Set] Creating product set for category '${categoryName}'...`)
+  const createUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/product_sets`
+  const filter = {
+    custom_label_0: { eq: categoryName }
+  }
+
+  try {
+    const res = await fetch(createUrl, {
+      method: "POST",
+      headers: { 
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        name: categoryName,
+        filter: JSON.stringify(filter)
+      })
+    })
+    
+    const data = await res.json()
+    if (!res.ok) {
+      console.warn(`[Meta Catalog Set Error] Failed to create product set '${categoryName}': ${data?.error?.message}`)
+    } else {
+      console.log(`[Meta Catalog Set Success] Created product set '${categoryName}' with ID ${data.id}`)
+    }
+  } catch (e: any) {
+    console.warn(`[Meta Catalog Set Error] Exception creating product set: ${e.message}`)
+  }
+}
+
+
+/**
  * Preflight check to verify if the catalog ID is accessible with the current
  * access token.
  *
@@ -496,6 +559,7 @@ export async function syncMenuItemToMetaCatalog(
       brand: item.restaurant.name,
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
+      custom_label_0: item.category?.name || "Uncategorized",
     }
 
 
@@ -513,6 +577,11 @@ export async function syncMenuItemToMetaCatalog(
       `[Meta Catalog Sync] ${batchMethod} '${item.name}' (retailer_id: ${retailerId}, restaurant: ${item.restaurant.name}, catalog: ${catalogId})`
     )
     console.log(`[Meta Catalog Sync] Exact Batch Payload for '${item.name}':`, JSON.stringify(batchRequestPayload, null, 2))
+
+    // Ensure the Product Set (category collection) exists
+    if (item.category?.name) {
+      await ensureMetaProductSet(catalogId, item.category.name, token)
+    }
 
     // -----------------------------------------------------------------------
     // Step 2: Send batch request
@@ -846,6 +915,11 @@ export async function syncMenuItemVariantToMetaCatalog(
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
       item_group_id: retailerIdBase,
+      custom_label_0: item.category?.name || "Uncategorized",
+    }
+    // Ensure the Product Set (category collection) exists
+    if (item.category?.name) {
+      await ensureMetaProductSet(catalogId, item.category.name, token)
     }
 
     const batchUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/batch`

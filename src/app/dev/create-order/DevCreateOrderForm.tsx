@@ -7,6 +7,7 @@ type MenuItem = { id: string; name: string; price: number; description: string |
 type Category = { id: string; name: string }
 type Restaurant = { id: string; name: string; delivery_fee: number; categories: Category[]; items: MenuItem[] }
 type OrderType = "DINING" | "TAKEAWAY" | "HOME_DELIVERY"
+type PosPaymentMethod = "CASH" | "ONLINE"
 type CartRow = { key: string; menu_item_id: string; name: string; quantity: number; unitPrice: number; variant_id?: string; addon_ids?: string[] }
 type SessionItem = { id: string; item_name_snapshot: string; quantity: number; unit_price_snapshot: number; line_total: number; description: string | null }
 type ActiveSession = { id: string; order_number: string; customer_name_snapshot: string; table_number: string | null; subtotal: number; total: number; order_type: string; items: SessionItem[] }
@@ -22,9 +23,9 @@ export default function DevCreateOrderForm({
 }: {
   restaurants: Restaurant[];
   activeSessions?: ActiveSession[];
-  createOrderAction: (payload: { restaurant_id: string; order_type: OrderType; table_number?: string; customer_name?: string; customer_phone?: string; address?: string; items: Array<{ menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[] }>; client_request_id: string }) => Promise<{ success?: boolean; orderNumber?: string; error?: string }>;
+  createOrderAction: (payload: { restaurant_id: string; order_type: OrderType; table_number?: string; customer_name?: string; customer_phone?: string; address?: string; payment_method?: PosPaymentMethod; items: Array<{ menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[] }>; client_request_id: string }) => Promise<{ success?: boolean; orderNumber?: string; error?: string }>;
   appendItemsAction: (payload: { orderId: string; items: Array<{ menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[] }> }) => Promise<{ success?: boolean; error?: string }>;
-  completeOrderAction: (orderId: string) => Promise<{ success?: boolean; error?: string }>;
+  completeOrderAction: (orderId: string, paymentMethod?: PosPaymentMethod) => Promise<{ success?: boolean; error?: string }>;
   deleteSessionAction: (orderId: string) => Promise<{ success?: boolean; error?: string }>;
   updateItemAction: (payload: { orderId: string; orderItemId: string; action: "set_quantity" | "remove"; quantity?: number }) => Promise<{ success?: boolean; error?: string }>;
 }) {
@@ -42,6 +43,7 @@ export default function DevCreateOrderForm({
   const [categoryId, setCategoryId] = useState("ALL")
   const [search, setSearch] = useState("")
   const [cart, setCart] = useState<CartRow[]>([])
+  const [paymentMethod, setPaymentMethod] = useState<PosPaymentMethod>("CASH")
 
   const [tableNumber, setTableNumber] = useState("")
   const [customerName, setCustomerName] = useState("")
@@ -102,7 +104,7 @@ export default function DevCreateOrderForm({
       if (cart.length === 0) return setFeedback({ type: "error", text: "Add at least one item." })
       setSubmitting(true); setFeedback(null)
       const clientRequestId = crypto.randomUUID()
-      const result = await createOrderAction({ restaurant_id: restaurant.id, order_type: orderType, table_number: tableNumber, customer_name: customerName, customer_phone: customerPhone, address, items: cart.map((row) => ({ menu_item_id: row.menu_item_id, quantity: row.quantity, variant_id: row.variant_id, addon_ids: row.addon_ids })), client_request_id: clientRequestId })
+      const result = await createOrderAction({ restaurant_id: restaurant.id, order_type: orderType, table_number: tableNumber, customer_name: customerName, customer_phone: customerPhone, address, payment_method: paymentMethod, items: cart.map((row) => ({ menu_item_id: row.menu_item_id, quantity: row.quantity, variant_id: row.variant_id, addon_ids: row.addon_ids })), client_request_id: clientRequestId })
       if (result.error) setFeedback({ type: "error", text: result.error })
       else {
         setFeedback({ type: "success", text: `POS session ${result.orderNumber} started.` })
@@ -130,7 +132,7 @@ export default function DevCreateOrderForm({
   async function handleCompleteOrder() {
     if (!selectedSessionId) return
     setSubmitting(true); setFeedback(null)
-    const result = await completeOrderAction(selectedSessionId)
+    const result = await completeOrderAction(selectedSessionId, paymentMethod)
     if (result.error) setFeedback({ type: "error", text: result.error })
     else {
       setFeedback({ type: "success", text: "Order completed and bill generated." })
@@ -267,29 +269,50 @@ export default function DevCreateOrderForm({
             </div>
           ) : (
             <>
+              {/* Search bar */}
               <div className="p-4 border-b border-slate-200 flex flex-wrap gap-3 bg-slate-50">
                 {activeTab === "SESSIONS" && selectedSessionId && (
                   <button type="button" onClick={() => { setSelectedSessionId(null); setCart([]); clearSessionOptimistic() }} className="mr-2 px-3 py-1.5 bg-white border border-slate-300 rounded text-sm font-medium hover:bg-slate-50">← Back</button>
                 )}
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search menu..." className="flex-1 min-w-[200px] rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none" />
-                <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 outline-none">
-                  <option value="ALL">All categories</option>
-                  {restaurant.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
               </div>
-              <div className="p-4 overflow-y-auto flex-1 bg-slate-50/50">
-                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {visibleItems.map((item) => (
-                    <button type="button" key={item.id} onClick={() => addItem(item)} className="h-full min-h-[110px] flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
-                      <div>
-                        <span className="block font-semibold text-slate-900 leading-tight">{item.name}</span>
-                        {(item.variants.length > 0 || item.addons.length > 0) && <span className="mt-1 block text-[10px] font-medium text-slate-400 uppercase tracking-wider">Customizable</span>}
-                      </div>
-                      <span className="mt-3 block text-sm font-bold text-indigo-700">₹{item.price.toFixed(2)}</span>
+              {/* Category sidebar + product grid */}
+              <div className="flex flex-1 overflow-hidden">
+                {/* Category Sidebar */}
+                <div className="w-36 shrink-0 border-r border-slate-200 bg-white overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryId("ALL")}
+                    className={`w-full text-left px-3 py-3 text-xs font-semibold border-b border-slate-100 transition-colors ${categoryId === "ALL" ? "bg-indigo-50 text-indigo-700 border-l-2 border-l-indigo-600" : "text-slate-600 hover:bg-slate-50"}`}
+                  >
+                    All Items
+                  </button>
+                  {restaurant.categories.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setCategoryId(c.id)}
+                      className={`w-full text-left px-3 py-3 text-xs font-semibold border-b border-slate-100 transition-colors ${categoryId === c.id ? "bg-indigo-50 text-indigo-700 border-l-2 border-l-indigo-600" : "text-slate-600 hover:bg-slate-50"}`}
+                    >
+                      {c.name}
                     </button>
                   ))}
                 </div>
-                {visibleItems.length === 0 && <div className="text-center p-8 text-slate-500">No items found.</div>}
+                {/* Product Grid */}
+                <div className="p-4 overflow-y-auto flex-1 bg-slate-50/50">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {visibleItems.map((item) => (
+                      <button type="button" key={item.id} onClick={() => addItem(item)} className="h-full min-h-[110px] flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
+                        <div>
+                          <span className="block font-semibold text-slate-900 leading-tight">{item.name}</span>
+                          {(item.variants.length > 0 || item.addons.length > 0) && <span className="mt-1 block text-[10px] font-medium text-slate-400 uppercase tracking-wider">Customizable</span>}
+                        </div>
+                        <span className="mt-3 block text-sm font-bold text-indigo-700">₹{item.price.toFixed(2)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {visibleItems.length === 0 && <div className="text-center p-8 text-slate-500">No items found.</div>}
+                </div>
               </div>
             </>
           )}
@@ -461,6 +484,29 @@ export default function DevCreateOrderForm({
                 </div>
 
                 {/* Complete Order */}
+                {/* Payment Method Selector */}
+                {(activeTab === "NEW" || (activeTab === "SESSIONS" && activeSession)) && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-slate-600">Payment Type</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod("CASH")}
+                        className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${paymentMethod === "CASH" ? "bg-emerald-600 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                      >
+                        💵 Cash
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod("ONLINE")}
+                        className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${paymentMethod === "ONLINE" ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                      >
+                        📱 Online
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {activeTab === "SESSIONS" && activeSession && (
                   <>
                     <button
@@ -469,7 +515,7 @@ export default function DevCreateOrderForm({
                       disabled={submitting || cart.length > 0 || isPending}
                       className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                     >
-                      ✅ Complete Order & Generate Bill
+                      ✅ Complete Order & Generate Bill ({paymentMethod === "CASH" ? "💵 Cash" : "📱 Online"})
                     </button>
                     {cart.length > 0 && (
                       <p className="text-[10px] text-center text-slate-500 font-medium">Add pending items to session first, then complete.</p>

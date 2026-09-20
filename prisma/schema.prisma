@@ -353,6 +353,8 @@ model Order {
 
 enum PaymentMethod {
   COD
+  CASH
+  ONLINE
 }
 
 enum PaymentStatus {

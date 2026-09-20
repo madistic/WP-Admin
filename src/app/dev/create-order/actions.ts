@@ -10,7 +10,7 @@ import { getDefaultBranchId } from "@/lib/branch-scope"
 
 type PosItem = { menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[]; description?: string }
 
-export async function createTestOrder(payload: { restaurant_id: string; order_type: OrderType; table_number?: string; customer_name?: string; customer_phone?: string; address?: string; items: PosItem[]; client_request_id: string }) {
+export async function createTestOrder(payload: { restaurant_id: string; order_type: OrderType; table_number?: string; customer_name?: string; customer_phone?: string; address?: string; payment_method?: "CASH" | "ONLINE"; items: PosItem[]; client_request_id: string }) {
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user || session.user.restaurant_id !== payload.restaurant_id) return { error: "Unauthorized" }
@@ -54,7 +54,9 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
       const finalStatus = OrderStatus.IN_PROCESS
       const finalPaymentStatus = PaymentStatus.PENDING
       
-      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: PaymentMethod.COD, payment_status: finalPaymentStatus, status: finalStatus, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: finalStatus, reason: "POS session started" } } } })
+      const posPaymentMethod = payload.payment_method === "ONLINE" ? PaymentMethod.ONLINE : PaymentMethod.CASH
+      
+      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: posPaymentMethod, payment_status: finalPaymentStatus, status: finalStatus, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: finalStatus, reason: "POS session started" } } } })
     })
 
     revalidatePath("/orders")
@@ -67,15 +69,18 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
   }
 }
 
-export async function completePosOrder(orderId: string) {
+export async function completePosOrder(orderId: string, paymentMethod?: "CASH" | "ONLINE") {
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user) return { error: "Unauthorized" }
+
+    const posPaymentMethod = paymentMethod === "ONLINE" ? PaymentMethod.ONLINE : PaymentMethod.CASH
 
     await prisma.order.update({
       where: { id: orderId, restaurant_id: session.user.restaurant_id },
       data: {
         status: OrderStatus.DELIVERED,
+        payment_method: posPaymentMethod,
         payment_status: PaymentStatus.PAID,
         history: {
           create: {

@@ -486,7 +486,6 @@ export async function syncMenuItemToMetaCatalog(
     const isAvailable = item.is_available && item.is_active
 
     const productPayload: any = {
-      retailer_id: retailerId,
       name: item.name,
       description: item.description || item.name,
       availability: isAvailable ? "in stock" : "out of stock",

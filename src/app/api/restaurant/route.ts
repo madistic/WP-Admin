@@ -39,6 +39,7 @@ export async function PATCH(request: Request) {
         ...(body.description !== undefined && { description: body.description }),
         ...(body.logo_url !== undefined && { logo_url: body.logo_url }),
         ...(body.printer_settings !== undefined && { printer_settings: JSON.stringify(body.printer_settings) }),
+        ...(body.google_review_url !== undefined && { google_review_url: body.google_review_url || null }),
       },
     })
 

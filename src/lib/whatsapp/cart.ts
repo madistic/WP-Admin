@@ -3,6 +3,7 @@ import { OrderSource, OrderStatus, OrderType, PaymentMethod, PaymentStatus } fro
 import { getDefaultBranchId } from "@/lib/branch-scope"
 import type { DeliveryQuoteResult } from "@/lib/whatsapp/delivery"
 import { calculateRedemption, redeemPointsTransaction } from "@/lib/loyalty"
+import { sendPushToRestaurant } from "@/lib/webpush"
 
 export interface CartItemAddOptions {
   variantId?: string
@@ -867,6 +868,15 @@ export async function createOrderFromCart(
 
     // 7. Clear cart items on successful order creation ONLY
     await clearCart(restaurantId, customerWhatsappNumber)
+
+    // 8. Fire push notification to owner dashboard (async, non-blocking)
+    sendPushToRestaurant(restaurantId, {
+      title: "🚨 New WhatsApp Order!",
+      body: `Order #${finalOrderNumber} placed — ₹${finalOrderTotal?.toFixed(2)}`,
+      tag: `new-order-${finalOrderNumber}`,
+      url: "/orders",
+      requireInteraction: true,
+    }).catch((err) => console.warn("[WebPush] Failed to push new order notification:", err?.message))
 
     return {
       success: true,

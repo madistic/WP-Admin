@@ -11,6 +11,7 @@ interface Restaurant {
   phone: string | null
   address: string | null
   logo_url: string | null
+  google_review_url: string | null
 }
 
 export default function SettingsPage() {
@@ -68,6 +69,7 @@ export default function SettingsPage() {
     const minimum_order = formData.get("minimum_order")
     const delivery_fee = formData.get("delivery_fee")
     const logo_url = formData.get("logo_url")
+    const google_review_url = formData.get("google_review_url")
 
     try {
       const res = await fetch("/api/restaurant", {
@@ -77,6 +79,7 @@ export default function SettingsPage() {
           minimum_order: Number(minimum_order),
           delivery_fee: Number(delivery_fee),
           logo_url: logo_url ? String(logo_url) : null,
+          google_review_url: google_review_url ? String(google_review_url) : null,
         }),
       })
 
@@ -175,6 +178,18 @@ export default function SettingsPage() {
               className="w-full p-2.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
             />
             <p className="text-[11px] text-slate-400 font-normal mt-1">Provide a public URL (e.g. Google Drive image link) to be used in WhatsApp welcome messages.</p>
+          </div>
+
+          <div>
+            <label className="block text-slate-700 font-medium mb-1">Google Review URL</label>
+            <input
+              type="url"
+              name="google_review_url"
+              defaultValue={restaurant?.google_review_url || ""}
+              placeholder="https://g.page/r/..."
+              className="w-full p-2.5 border border-slate-300 rounded-lg text-slate-900 bg-white"
+            />
+            <p className="text-[11px] text-slate-400 font-normal mt-1">Customers will be asked to leave a review here after order completion.</p>
           </div>
 
           <div className="pt-2 flex justify-end">

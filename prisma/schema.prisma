@@ -34,6 +34,9 @@ model Restaurant {
   loyalty_min_order_value          Float    @default(500.0)
   loyalty_max_redemption_percent   Float    @default(50.0)
 
+  // Customer Engagement
+  google_review_url                String?
+
   created_at                DateTime @default(now())
   updated_at                DateTime @updatedAt
 
@@ -49,6 +52,7 @@ model Restaurant {
   pointsLedgers    PointsLedger[]
   campaignTemplates CustomerCampaignTemplate[]
   campaigns        CustomerCampaign[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Branch {
@@ -82,6 +86,21 @@ model Branch {
 
   @@unique([restaurant_id, code])
   @@index([restaurant_id, is_active])
+}
+
+model PushSubscription {
+  id            String   @id @default(uuid())
+  restaurant_id String
+  user_id       String?
+  endpoint      String   @unique
+  p256dh        String
+  auth          String
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([restaurant_id])
 }
 
 model User {

@@ -112,17 +112,21 @@ export async function DELETE(request: Request) {
 
     const category = await prisma.menuCategory.findFirst({
       where: { id, restaurant_id: restaurantId },
-      include: { _count: { select: { items: true } } },
     })
 
     if (!category) return NextResponse.json({ error: "Category not found" }, { status: 404 })
 
-    if (category._count.items > 0) {
+    // Count only non-soft-deleted items; ignore deleted_at IS NOT NULL rows
+    const activeItemCount = await prisma.menuItem.count({
+      where: { category_id: id, deleted_at: null },
+    })
+
+    if (activeItemCount > 0) {
       return NextResponse.json(
         {
-          error: `Category contains ${category._count.items} menu item(s). Move or delete items before deleting the category.`,
+          error: `Category still contains ${activeItemCount} active menu item(s). Move or delete them before removing the category.`,
           hasItems: true,
-          itemCount: category._count.items,
+          itemCount: activeItemCount,
         },
         { status: 409 }
       )
@@ -152,14 +156,16 @@ export async function PATCH(request: Request) {
     const restaurantId = session.user.restaurant_id
     const categories = await prisma.menuCategory.findMany({
       where: { id: { in: categoryIds }, restaurant_id: restaurantId },
-      include: { _count: { select: { items: true } } },
     })
     if (categories.length !== categoryIds.length) return NextResponse.json({ error: "One or more categories were not found." }, { status: 404 })
 
     if (action === "delete") {
-      const affectedItems = categories.reduce((count, category) => count + category._count.items, 0)
-      if (affectedItems > 0) {
-        return NextResponse.json({ error: `Cannot delete selected categories: ${affectedItems} menu item(s) are still assigned. Move items first.`, affectedItems }, { status: 409 })
+      // Count only non-soft-deleted items across all selected categories
+      const activeItemCount = await prisma.menuItem.count({
+        where: { category_id: { in: categoryIds }, deleted_at: null },
+      })
+      if (activeItemCount > 0) {
+        return NextResponse.json({ error: `Cannot delete selected categories: ${activeItemCount} active menu item(s) are still assigned. Move or delete items first.`, affectedItems: activeItemCount }, { status: 409 })
       }
       const result = await prisma.menuCategory.deleteMany({ where: { id: { in: categoryIds }, restaurant_id: restaurantId } })
       return NextResponse.json({ success: true, action, count: result.count })

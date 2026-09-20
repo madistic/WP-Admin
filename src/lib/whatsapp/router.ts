@@ -494,66 +494,6 @@ async function processIncomingWhatsAppMessageUnlocked(
     }
   }
 
-  if (interactiveId.startsWith("cat_")) {
-    const categoryId = interactiveId.replace("cat_", "")
-    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
-  }
-
-  // Checkbox multi-selection toggle
-  if (interactiveId.startsWith("sel_toggle_")) {
-    const parts = interactiveId.replace("sel_toggle_", "").split("_")
-    const categoryId = parts[0]
-    const itemId = parts[1]
-    await toggleCategorySelection(restaurant.id, sender, itemId)
-    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
-  }
-
-  if (interactiveId.startsWith("continue_cat_")) {
-    const categoryId = interactiveId.replace("continue_cat_", "")
-    return await handleCategoryQuantityStep(restaurant, sender, categoryId, 0)
-  }
-
-  if (interactiveId.startsWith("qstep_inc_")) {
-    const parts = interactiveId.replace("qstep_inc_", "").split("_")
-    const categoryId = parts[0]
-    const itemIndex = parseInt(parts[1], 10)
-    const itemId = parts[2]
-    await updateCategorySelectionQuantity(restaurant.id, sender, itemId, 1)
-    return await handleCategoryQuantityStep(restaurant, sender, categoryId, itemIndex)
-  }
-
-  if (interactiveId.startsWith("qstep_dec_")) {
-    const parts = interactiveId.replace("qstep_dec_", "").split("_")
-    const categoryId = parts[0]
-    const itemIndex = parseInt(parts[1], 10)
-    const itemId = parts[2]
-    await updateCategorySelectionQuantity(restaurant.id, sender, itemId, -1)
-    return await handleCategoryQuantityStep(restaurant, sender, categoryId, itemIndex)
-  }
-
-  if (interactiveId.startsWith("qstep_next_")) {
-    const parts = interactiveId.replace("qstep_next_", "").split("_")
-    const categoryId = parts[0]
-    const nextIndex = parseInt(parts[1], 10)
-    return await handleCategoryQuantityStep(restaurant, sender, categoryId, nextIndex)
-  }
-
-  if (interactiveId.startsWith("qstep_back_")) {
-    const parts = interactiveId.replace("qstep_back_", "").split("_")
-    const categoryId = parts[0]
-    const prevIndex = parseInt(parts[1], 10)
-    return await handleCategoryQuantityStep(restaurant, sender, categoryId, prevIndex)
-  }
-
-  if (interactiveId.startsWith("commit_cat_")) {
-    return await handleCommitCategorySelections(restaurant, sender)
-  }
-
-  if (interactiveId.startsWith("item_")) {
-    const itemId = interactiveId.replace("item_", "")
-    return await handleItemSelection(restaurant, sender, itemId)
-  }
-
   if (interactiveId.startsWith("add_") && !interactiveId.startsWith("add_var_") && !interactiveId.startsWith("add_addon_")) {
     const itemId = interactiveId.replace("add_", "")
     return await handleAddToCartAction(restaurant, sender, itemId)
@@ -649,13 +589,12 @@ async function processIncomingWhatsAppMessageUnlocked(
     return await handleAddToCartTextCommand(restaurant, sender, target)
   }
 
-  // Match category by number or name fallback
+  // Match category by number or name → open native catalog
   const categories = await getWhatsAppCategories(restaurant.id)
   if (/^\d+$/.test(cleanText)) {
     const numIndex = parseInt(cleanText, 10)
     if (numIndex >= 1 && numIndex <= categories.length) {
-      const selectedCat = categories[numIndex - 1]
-      return await handleCategoryProductsSelection(restaurant, sender, selectedCat.id)
+      return await handleOpenCatalog(restaurant, sender)
     }
   }
 
@@ -663,7 +602,7 @@ async function processIncomingWhatsAppMessageUnlocked(
     (c) => c.title.toLowerCase() === cleanText || cleanText.includes(c.title.toLowerCase())
   )
   if (matchedCategory) {
-    return await handleCategoryProductsSelection(restaurant, sender, matchedCategory.id)
+    return await handleOpenCatalog(restaurant, sender)
   }
 
   // Search Products by Name / Keyword
@@ -1377,7 +1316,7 @@ export async function handleCommitCategorySelections(
       sender,
       responseText,
       [
-        { id: "action_categories", title: "🍽️ View Menu" },
+        { id: "action_view_menu", title: "🍽️ View Menu" },
         { id: "action_view_cart", title: "🛒 View Cart" },
         { id: "cart_checkout", title: "✅ Checkout" },
       ]
@@ -1422,7 +1361,7 @@ export async function handleViewCart(
     })
 
     rows.push({
-      id: "action_categories",
+      id: "action_view_menu",
       title: "🍽️ View Menu",
       description: "Back to Menu",
     })
@@ -1462,7 +1401,7 @@ export async function handleItemSelection(
         restaurant.whatsapp_phone_number_id,
         sender,
         fallbackText,
-        [{ id: "action_categories", title: "📂 View Menu" }]
+        [{ id: "action_view_menu", title: "📂 View Menu" }]
       )
     }
     return { handled: true, responseText: fallbackText, intent: "item_not_found" }
@@ -1492,7 +1431,7 @@ export async function handleItemSelection(
         baseDetails,
         [
           { id: `add_${item.id}`, title: "🛒 Add to Cart" },
-          { id: "action_categories", title: "📂 View Menu" },
+          { id: "action_view_menu", title: "📂 View Menu" },
           { id: "action_view_cart", title: "🛍️ View Cart" },
         ]
       )
@@ -1518,7 +1457,7 @@ export async function handleAddToCartAction(
         restaurant.whatsapp_phone_number_id,
         sender,
         responseText,
-        [{ id: "action_categories", title: "📂 View Menu" }]
+        [{ id: "action_view_menu", title: "📂 View Menu" }]
       )
     }
   } else {
@@ -1539,7 +1478,7 @@ export async function handleAddToCartAction(
         responseText,
         [
           { id: `add_note_prompt_${cartItemId}`, title: "✍️ Add Note" },
-          { id: "action_categories", title: "🍽️ View Menu" },
+          { id: "action_view_menu", title: "🍽️ View Menu" },
           { id: "action_view_cart", title: "🛒 View Cart" },
         ]
       )

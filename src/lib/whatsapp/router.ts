@@ -454,9 +454,9 @@ async function processIncomingWhatsAppMessageUnlocked(
     return await handleViewCart(restaurant, sender)
   }
 
-  // Search prompt
+  // Search prompt (Redirect to native catalog)
   if (interactiveId === "action_search_prompt" || cleanText === "search") {
-    return await handleSearchPrompt(restaurant, sender)
+    return await handleOpenCatalog(restaurant, sender)
   }
 
   // Legacy interactive IDs: category/item selection, quantity steps, commit — redirect to native catalog
@@ -520,15 +520,7 @@ async function processIncomingWhatsAppMessageUnlocked(
     }
   }
 
-  if (interactiveId.startsWith("add_") && !interactiveId.startsWith("add_var_") && !interactiveId.startsWith("add_addon_")) {
-    const itemId = interactiveId.replace("add_", "")
-    return await handleAddToCartAction(restaurant, sender, itemId)
-  }
 
-  if (interactiveId.startsWith("var_opt_")) {
-    const [itemId, variantId] = interactiveId.replace("var_opt_", "").split("_")
-    return await handleAddToCartAction(restaurant, sender, itemId, { variantId })
-  }
 
   if (interactiveId.startsWith("add_note_prompt_")) {
     const cartItemId = interactiveId.replace("add_note_prompt_", "")
@@ -595,11 +587,7 @@ async function processIncomingWhatsAppMessageUnlocked(
     return { handled: true, responseText, intent: "note_saved" }
   }
 
-  // Check if user is replying to Search Prompt
-  if (cart && cart.checkout_step === "AWAITING_SEARCH_QUERY") {
-    await updateCartCheckoutStep(restaurant.id, sender, "IDLE")
-    return await handleSearchResults(restaurant, sender, rawText)
-  }
+
 
   // Text commands fallback (+1 1, -1 1, remove 1, note 1 xxx, add xxx)
   if (cleanText.startsWith("note ")) {
@@ -634,7 +622,7 @@ async function processIncomingWhatsAppMessageUnlocked(
   // Search Products by Name / Keyword
   const searchResults = await getWhatsAppItems(restaurant.id, { searchQuery: rawText })
   if (searchResults.length > 0) {
-    return await handleSearchResults(restaurant, sender, rawText)
+    return await handleOpenCatalog(restaurant, sender)
   }
 
   // ── SMART FALLBACK ────────────────────────────────────────────────────────
@@ -709,48 +697,14 @@ export async function handleOpenCatalog(
   }
 
   if (catalogId) {
-    const { sendWhatsAppMultiProductList, sendWhatsAppInteractiveButtons, sendWhatsAppCatalogMessage } = await import("./client")
+    const { sendWhatsAppInteractiveButtons, sendWhatsAppCatalogMessage } = await import("./client")
     
-    const categories = await getWhatsAppCategories(restaurant.id)
-    const items = await getWhatsAppItems(restaurant.id)
-    
-    const sections: Array<{ title: string; product_items: Array<{ product_retailer_id: string }> }> = []
-    let totalAdded = 0
-    
-    for (const cat of categories) {
-      const catItems = items.filter(i => i.category_id === cat.id && i.meta_sync_status === "SYNCED")
-      if (catItems.length === 0) continue
-      
-      const product_items: Array<{ product_retailer_id: string }> = []
-      for (const item of catItems) {
-        if (totalAdded >= 30) break
-        product_items.push({ product_retailer_id: item.meta_product_sku || item.id })
-        totalAdded++
-      }
-      
-      if (product_items.length > 0) {
-        sections.push({ title: cat.title, product_items })
-      }
-      if (totalAdded >= 30) break
-    }
-
-    if (sections.length > 0) {
-      await sendWhatsAppMultiProductList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        catalogId,
-        sections,
-        { headerText: "Browse Menu" }
-      )
-    } else {
-      await sendWhatsAppCatalogMessage(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        catalogId
-      )
-    }
+    await sendWhatsAppCatalogMessage(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      catalogId
+    )
 
     // Always show Track Order alongside the menu
     await sendWhatsAppInteractiveButtons(
@@ -778,48 +732,14 @@ export async function handleOpenCatalogCart(
   const responseText = "You can update your cart items below:"
 
   if (restaurant.whatsapp_phone_number_id && catalogId) {
-    const { sendWhatsAppMultiProductList, sendWhatsAppCatalogMessage } = await import("./client")
+    const { sendWhatsAppCatalogMessage } = await import("./client")
     
-    const categories = await getWhatsAppCategories(restaurant.id)
-    const items = await getWhatsAppItems(restaurant.id)
-    
-    const sections: Array<{ title: string; product_items: Array<{ product_retailer_id: string }> }> = []
-    let totalAdded = 0
-    
-    for (const cat of categories) {
-      const catItems = items.filter(i => i.category_id === cat.id && i.meta_sync_status === "SYNCED")
-      if (catItems.length === 0) continue
-      
-      const product_items: Array<{ product_retailer_id: string }> = []
-      for (const item of catItems) {
-        if (totalAdded >= 30) break
-        product_items.push({ product_retailer_id: item.meta_product_sku || item.id })
-        totalAdded++
-      }
-      
-      if (product_items.length > 0) {
-        sections.push({ title: cat.title, product_items })
-      }
-      if (totalAdded >= 30) break
-    }
-
-    if (sections.length > 0) {
-      await sendWhatsAppMultiProductList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        catalogId,
-        sections,
-        { headerText: "Update Cart" }
-      )
-    } else {
-      await sendWhatsAppCatalogMessage(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        catalogId
-      )
-    }
+    await sendWhatsAppCatalogMessage(
+      restaurant.whatsapp_phone_number_id,
+      sender,
+      responseText,
+      catalogId
+    )
     return { handled: true, responseText, intent: "open_catalog_cart" }
   }
   return await handleInitialGreeting(restaurant, sender)
@@ -947,62 +867,6 @@ async function promptForOrderType(
   return { handled: true, responseText, intent: "awaiting_order_type" }
 }
 
-/**
- * STEP 2 & 5: CATEGORIES LIST
- */
-export async function handleCategoriesList(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const categories = await getWhatsAppCategories(restaurant.id)
-  const cart = await getCartDetails(restaurant.id, sender)
-
-  const bodyText = `📂 *Menu Categories*\nSelect a category below to view items:`
-
-  if (categories.length === 0) {
-    const fallbackText = `👋 Welcome to *${CUSTOMER_BRAND_NAME}*!\n\nOur menu is being refreshed. Please check back soon! 🍽️`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, fallbackText)
-    }
-    return { handled: true, responseText: fallbackText, intent: "main_menu_empty" }
-  }
-
-  if (restaurant.whatsapp_phone_number_id) {
-    if (categories.length <= 10) {
-      const rows = categories.map((cat) => ({
-        id: `cat_${cat.id}`,
-        title: cat.title.slice(0, 24),
-        description: `${cat.item_count} items`.slice(0, 72),
-      }))
-
-      // Always include View Cart row if cart has items
-      if (cart && cart.item_count > 0 && rows.length < 10) {
-        rows.push({
-          id: "action_view_cart",
-          title: "🛒 View Cart",
-          description: `${cart.item_count} items • Total: ₹${cart.total.toFixed(2)}`,
-        })
-      }
-
-      await sendWhatsAppInteractiveList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        bodyText,
-        "Select Category",
-        [{ title: "Categories", rows }]
-      )
-    } else {
-      const lines: string[] = [`📂 *${CUSTOMER_BRAND_NAME} Menu Categories*:\n`]
-      categories.forEach((cat, idx) => {
-        lines.push(`${idx + 1}. *${cat.title}* (${cat.item_count} items)`)
-      })
-      lines.push(`\nReply with category number or name to view items!`)
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, lines.join("\n"))
-    }
-  }
-
-  return { handled: true, responseText: bodyText, intent: "categories_list" }
-}
 
 /**
  * Handles incoming native WhatsApp Meta Catalog order payload (`messageType === "order"`).
@@ -1142,235 +1006,6 @@ export async function handleNativeOrderMessage(
   return { handled: true, responseText, intent: "native_order_received_options" }
 }
 
-/**
- * STEP 3: CATEGORY PRODUCT MULTI-SELECTION (+ / - controls)
- */
-export async function handleCategoryProductsSelection(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string,
-  categoryId: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const categories = await getWhatsAppCategories(restaurant.id)
-  const items = await getWhatsAppItems(restaurant.id, { categoryId })
-  const { selections } = await getCategorySelections(restaurant.id, sender)
-
-  const category = categories.find((c) => c.id === categoryId)
-  const catName = category ? category.title : "Category"
-
-  if (items.length === 0) {
-    const text = `No items currently available in *${catName}*.`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        text,
-        [{ id: "action_categories", title: "🍽️ Order Food" }]
-      )
-    }
-    return { handled: true, responseText: text, intent: "category_empty" }
-  }
-
-  const lines: string[] = [`Select Items (*${catName.toUpperCase()}*)\n`]
-
-  items.forEach((item) => {
-    const isSelected = selections.some((s) => s.menu_item_id === item.id)
-    const checkIcon = isSelected ? "☑" : "☐"
-    const vegBadge = item.is_veg ? "🟢" : "🔴"
-    const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
-
-    lines.push(`${checkIcon} *${cleanName}* ${vegBadge}`)
-    lines.push(`   ${item.price_display}`)
-    if (item.description) {
-      lines.push(`   _${item.description.slice(0, 80)}${item.description.length > 80 ? "..." : ""}_`)
-    }
-    lines.push("")
-  })
-
-  const selectedCount = selections.length
-  if (selectedCount > 0) {
-    lines.push(`Selected: *${selectedCount} item${selectedCount > 1 ? "s" : ""}*`)
-  }
-
-  const responseText = lines.join("\n")
-
-  if (restaurant.whatsapp_phone_number_id) {
-    if (items.length <= 8) {
-      const rows: Array<{ id: string; title: string; description?: string }> = []
-      items.forEach((item) => {
-        const isSelected = selections.some((s) => s.menu_item_id === item.id)
-        const checkIcon = isSelected ? "☑" : "☐"
-        const cleanName = item.name.replace(/^[🟢🔴]\s*/, "")
-
-        rows.push({
-          id: `sel_toggle_${categoryId}_${item.id}`,
-          title: `${checkIcon} ${cleanName}`.slice(0, 24),
-          description: `${item.price_display}${isSelected ? " • Selected" : ""}`.slice(0, 72),
-        })
-      })
-
-      if (selectedCount > 0) {
-        rows.push({
-          id: `continue_cat_${categoryId}`,
-          title: "Continue →",
-          description: `Configure quantity for ${selectedCount} item${selectedCount > 1 ? "s" : ""}`,
-        })
-      }
-
-      rows.push({
-        id: "action_categories",
-        title: "🍽️ Other Categories",
-        description: "Browse menu categories",
-      })
-
-      await sendWhatsAppInteractiveList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        "Select Items",
-        [{ title: catName.slice(0, 24), rows }]
-      )
-    } else {
-      const buttons: Array<{ id: string; title: string }> = []
-      if (selectedCount > 0) {
-        buttons.push({ id: `continue_cat_${categoryId}`, title: "Continue →" })
-      }
-      buttons.push({ id: "action_categories", title: "🍽️ Categories" })
-      buttons.push({ id: "action_view_cart", title: "🛒 View Cart" })
-
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        buttons
-      )
-    }
-  }
-
-  return { handled: true, responseText, intent: "category_items_selection" }
-}
-
-/**
- * STEP 4: SEQUENTIAL ITEM QUANTITY CONFIGURATION (One Item at a Time)
- */
-export async function handleCategoryQuantityStep(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string,
-  categoryId: string,
-  itemIndex: number
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const { selections } = await getCategorySelections(restaurant.id, sender)
-
-  if (selections.length === 0) {
-    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
-  }
-
-  // Handle index boundaries
-  if (itemIndex < 0) {
-    return await handleCategoryProductsSelection(restaurant, sender, categoryId)
-  }
-
-  // All selected items configured -> show summary & commit options
-  if (itemIndex >= selections.length) {
-    const menuItems = await getWhatsAppItems(restaurant.id)
-    const lines: string[] = ["*Your Selected Items:*\n"]
-
-    let totalEstimate = 0
-    selections.forEach((sel) => {
-      const item = menuItems.find((i) => i.id === sel.menu_item_id)
-      const cleanName = item ? item.name.replace(/^[🟢🔴]\s*/, "") : "Item"
-      const price = item ? item.price : 0
-      const lineTotal = price * sel.quantity
-      totalEstimate += lineTotal
-      lines.push(`• *${cleanName}* × ${sel.quantity}  (₹${lineTotal.toFixed(2)})`)
-    })
-
-    lines.push(`\nSubtotal: *₹${totalEstimate.toFixed(2)}*`)
-    const responseText = lines.join("\n")
-
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [
-          { id: `commit_cat_${categoryId}`, title: "🛒 View Cart" },
-          { id: `qstep_back_${categoryId}_${selections.length - 1}`, title: "← Back" },
-          { id: "action_categories", title: "Add More Items →" },
-        ]
-      )
-    }
-
-    return { handled: true, responseText, intent: "category_quantity_summary" }
-  }
-
-  // Active item configuration
-  const currentSel = selections[itemIndex]
-  const itemDetails = await getWhatsAppItemDetails(restaurant.id, currentSel.menu_item_id)
-  const cleanName = itemDetails ? itemDetails.name.replace(/^[🟢🔴]\s*/, "") : "Item"
-  const priceDisplay = itemDetails ? itemDetails.price_display : ""
-  const isLastItem = itemIndex === selections.length - 1
-  const nextBtnTitle = isLastItem ? "Done →" : "Next →"
-
-  const lines: string[] = []
-  lines.push("Set Quantity\n")
-  lines.push(`*${cleanName}*`)
-  if (priceDisplay) lines.push(`${priceDisplay} each\n`)
-  lines.push(`Quantity: *[ − ]  ${currentSel.quantity}  [ + ]*\n`)
-  lines.push(`Step ${itemIndex + 1} of ${selections.length}`)
-
-  const responseText = lines.join("\n")
-
-  if (restaurant.whatsapp_phone_number_id) {
-    const buttons: Array<{ id: string; title: string }> = [
-      { id: `qstep_inc_${categoryId}_${itemIndex}_${currentSel.menu_item_id}`, title: "[ + ] Increase" },
-    ]
-
-    if (currentSel.quantity > 1) {
-      buttons.push({ id: `qstep_dec_${categoryId}_${itemIndex}_${currentSel.menu_item_id}`, title: "[ − ] Decrease" })
-    } else if (itemIndex > 0) {
-      buttons.push({ id: `qstep_back_${categoryId}_${itemIndex - 1}`, title: "← Back" })
-    } else {
-      buttons.push({ id: `cat_${categoryId}`, title: "← Back to Items" })
-    }
-
-    buttons.push({ id: `qstep_next_${categoryId}_${itemIndex + 1}`, title: nextBtnTitle })
-
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      buttons.slice(0, 3) // Max 3 buttons in Meta API
-    )
-  }
-
-  return { handled: true, responseText, intent: "category_quantity_step" }
-}
-
-/**
- * STEP 4: COMMIT BATCH SELECTIONS TO CART & RETURN TO MENU
- */
-export async function handleCommitCategorySelections(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const updatedCart = await commitSelectionsToCart(restaurant.id, sender)
-  const responseText = `✅ Selected items added to your cart!\nCart Total: *₹${updatedCart?.total.toFixed(2)}* (${updatedCart?.item_count} items)`
-
-  if (restaurant.whatsapp_phone_number_id) {
-    await sendWhatsAppInteractiveButtons(
-      restaurant.whatsapp_phone_number_id,
-      sender,
-      responseText,
-      [
-        { id: "action_view_menu", title: "🍽️ View Menu" },
-        { id: "action_view_cart", title: "🛒 View Cart" },
-        { id: "cart_checkout", title: "✅ Checkout" },
-      ]
-    )
-  }
-
-  return { handled: true, responseText, intent: "batch_add_to_cart_success" }
-}
 
 /**
  * STEP 6: VIEW CART SUMMARY
@@ -1430,62 +1065,6 @@ export async function handleViewCart(
   return { handled: true, responseText, intent: "view_cart" }
 }
 
-/**
- * Item Details view
- */
-export async function handleItemSelection(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string,
-  itemId: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const item = await getWhatsAppItemDetails(restaurant.id, itemId)
-
-  if (!item) {
-    const fallbackText = "Sorry, that item is currently unavailable."
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        fallbackText,
-        [{ id: "action_view_menu", title: "📂 View Menu" }]
-      )
-    }
-    return { handled: true, responseText: fallbackText, intent: "item_not_found" }
-  }
-
-  const baseDetails = formatWhatsAppProductDetailText(item)
-
-  if (restaurant.whatsapp_phone_number_id) {
-    if (item.has_variants) {
-      const rows = item.variants.map((v) => ({
-        id: `var_opt_${item.id}_${v.id}`,
-        title: `${item.name.replace(/^[🟢🔴]\s*/, "")} (${v.name})`.slice(0, 24),
-        description: `${v.price_display}`.slice(0, 72),
-      }))
-
-      await sendWhatsAppInteractiveList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        `${baseDetails}\n\n👇 *Select size/option below to add:*`,
-        "Select Size",
-        [{ title: "Variants", rows }]
-      )
-    } else {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        baseDetails,
-        [
-          { id: `add_${item.id}`, title: "🛒 Add to Cart" },
-          { id: "action_view_menu", title: "📂 View Menu" },
-          { id: "action_view_cart", title: "🛍️ View Cart" },
-        ]
-      )
-    }
-  }
-
-  return { handled: true, responseText: baseDetails, intent: "item_details" }
-}
 
 export async function handleAddToCartAction(
   restaurant: ResolvedRestaurantInfo,
@@ -2146,61 +1725,4 @@ export async function handleSearchPrompt(
     await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, responseText)
   }
   return { handled: true, responseText, intent: "search_prompt" }
-}
-
-export async function handleSearchResults(
-  restaurant: ResolvedRestaurantInfo,
-  sender: string,
-  query: string
-): Promise<{ handled: boolean; responseText: string; intent: string }> {
-  const searchResults = await getWhatsAppItems(restaurant.id, { searchQuery: query })
-
-  if (searchResults.length === 0) {
-    const responseText = `🔍 No items found matching "${query}".`
-    if (restaurant.whatsapp_phone_number_id) {
-      await sendWhatsAppInteractiveButtons(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        [
-          { id: "action_search_prompt", title: "🔍 Search Again" },
-          { id: "action_categories", title: "📂 View Menu" },
-        ]
-      )
-    }
-    return { handled: true, responseText, intent: "search_no_results" }
-  }
-
-  if (searchResults.length === 1) {
-    return await handleItemSelection(restaurant, sender, searchResults[0].id)
-  }
-
-  const responseText = `🔍 Search results for *"${query}"*:`
-
-  if (restaurant.whatsapp_phone_number_id) {
-    if (searchResults.length <= 10) {
-      const rows = searchResults.map((item) => ({
-        id: `item_${item.id}`,
-        title: item.name.slice(0, 24),
-        description: `${item.price_display}${item.description ? " - " + item.description : ""}`.slice(0, 72),
-      }))
-
-      await sendWhatsAppInteractiveList(
-        restaurant.whatsapp_phone_number_id,
-        sender,
-        responseText,
-        "Select Item",
-        [{ title: "Matching Products", rows }]
-      )
-    } else {
-      const lines: string[] = [responseText + "\n"]
-      searchResults.forEach((item, idx) => {
-        lines.push(`${idx + 1}. ${item.name} - ${item.price_display}`)
-      })
-      lines.push(`\nReply item number to view details!`)
-      await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, lines.join("\n"))
-    }
-  }
-
-  return { handled: true, responseText, intent: "search_results" }
 }

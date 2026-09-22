@@ -228,7 +228,7 @@ export default function DevCreateOrderForm({
 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6 items-start">
         {/* Left Side: Menu or Sessions List */}
-        <section className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden min-h-[600px] flex flex-col">
+        <section className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
           {activeTab === "SESSIONS" && !selectedSessionId ? (
             <div>
               <div className="bg-slate-50 border-b border-slate-200 p-4">
@@ -277,9 +277,9 @@ export default function DevCreateOrderForm({
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search menu..." className="flex-1 min-w-[200px] rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none" />
               </div>
               {/* Category sidebar + product grid */}
-              <div className="flex flex-1 overflow-hidden">
+              <div className="flex flex-1">
                 {/* Category Sidebar */}
-                <div className="w-36 shrink-0 border-r border-slate-200 bg-white overflow-y-auto">
+                <div className="w-36 shrink-0 border-r border-slate-200 bg-white">
                   <button
                     type="button"
                     onClick={() => setCategoryId("ALL")}
@@ -299,7 +299,7 @@ export default function DevCreateOrderForm({
                   ))}
                 </div>
                 {/* Product Grid */}
-                <div className="p-4 overflow-y-auto flex-1 bg-slate-50/50">
+                <div className="p-4 flex-1 bg-slate-50/50">
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {visibleItems.map((item) => (
                       <button type="button" key={item.id} onClick={() => addItem(item)} className="h-full min-h-[110px] flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
@@ -319,7 +319,7 @@ export default function DevCreateOrderForm({
         </section>
 
         {/* Right Side: Cart / Session Details */}
-        <aside className="sticky top-20 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col max-h-[calc(100vh-100px)] overflow-hidden">
+        <aside className="bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
           <form onSubmit={submitOrder} className="flex flex-col h-full">
 
             {/* Header */}
@@ -358,7 +358,7 @@ export default function DevCreateOrderForm({
 
             {/* Existing Items for active session with edit controls */}
             {activeTab === "SESSIONS" && activeSession && (
-              <div className="overflow-y-auto" style={{ maxHeight: "280px" }}>
+              <div>
                 <div className="p-3 bg-slate-100 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase tracking-wider">
                   Session Items — tap to edit
                 </div>
@@ -407,7 +407,7 @@ export default function DevCreateOrderForm({
 
             {/* Cart (new items to add) */}
             {(activeTab === "NEW" || (activeTab === "SESSIONS" && selectedSessionId)) && (
-              <div className="flex-1 overflow-y-auto min-h-[120px]">
+              <div className="flex-1 min-h-[120px]">
                 {activeTab === "SESSIONS" && cart.length > 0 && (
                   <div className="p-3 bg-indigo-50 border-b border-indigo-100 text-xs font-bold text-indigo-700 uppercase tracking-wider">
                     Items to Add

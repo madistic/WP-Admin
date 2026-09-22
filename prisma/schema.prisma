@@ -113,12 +113,14 @@ model User {
   password_hash String
   role          UserRole @default(SUPER_ADMIN)
   is_active     Boolean  @default(true)
+  employee_code String?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
   restaurant Restaurant     @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   branch      Branch?         @relation(fields: [branch_id], references: [id], onDelete: SetNull)
   staffNotes  CustomerNote[]
+  assigned_orders Order[] @relation("OrderEmployee")
 
   @@index([restaurant_id, branch_id])
   @@index([restaurant_id, role])
@@ -320,6 +322,7 @@ model Order {
   delivery_charge_per_km     Float?
   table_number               String?
   client_request_id          String?
+  assigned_employee_id       String?
   
   points_earned              Int       @default(0)
   points_redeemed            Int       @default(0)
@@ -342,6 +345,7 @@ model Order {
   restaurant Restaurant           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   branch     Branch                @relation(fields: [branch_id], references: [id], onDelete: Cascade)
   customer   Customer             @relation(fields: [customer_id], references: [id], onDelete: Restrict)
+  assigned_employee User?         @relation("OrderEmployee", fields: [assigned_employee_id], references: [id], onDelete: SetNull)
   items      OrderItem[]
   history    OrderStatusHistory[]
   pointsLedgers PointsLedger[]

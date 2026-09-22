@@ -4,10 +4,15 @@ import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import { syncMenuItemWithVariants } from "@/lib/whatsapp/catalog"
 
+import { requireAdminApi } from "@/lib/role-check"
+
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    
+    const adminError = requireAdminApi(session)
+    if (adminError) return adminError
 
     const body = await request.json()
     const {

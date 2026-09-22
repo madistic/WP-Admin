@@ -9,6 +9,8 @@ import {
   syncMenuItemToMetaCatalog,
 } from "@/lib/whatsapp/catalog"
 
+import { requireAdminApi } from "@/lib/role-check"
+
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -20,6 +22,14 @@ export async function PUT(
 
     const body = await request.json()
     const restaurantId = session.user.restaurant_id
+
+    const adminError = requireAdminApi(session)
+    if (adminError) {
+      const keys = Object.keys(body);
+      if (keys.length > 1 || (keys.length === 1 && keys[0] !== "is_available")) {
+        return NextResponse.json({ error: "Forbidden: You can only update availability" }, { status: 403 })
+      }
+    }
 
     const existing = await prisma.menuItem.findFirst({
       where: { id: itemId, restaurant_id: restaurantId },
@@ -85,6 +95,9 @@ export async function DELETE(
     }
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+    const adminError = requireAdminApi(session)
+    if (adminError) return adminError
 
     const restaurantId = session.user.restaurant_id
 

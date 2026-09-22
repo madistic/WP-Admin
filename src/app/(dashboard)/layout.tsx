@@ -24,7 +24,7 @@ export default async function DashboardLayout({
   })
 
   return (
-    <ClientAppShell user={{ name: session.user.name, email: session.user.email }} restaurant={restaurant}>
+    <ClientAppShell user={{ name: session.user.name, email: session.user.email, role: session.user.role }} restaurant={restaurant}>
       <OrderAlertProvider />
       <PushNotificationManager />
       {children}

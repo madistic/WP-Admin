@@ -12,7 +12,7 @@ export default function ClientAppShell({
   restaurant,
 }: {
   children: React.ReactNode
-  user: { name?: string | null; email?: string | null }
+  user: { name?: string | null; email?: string | null; role?: string }
   restaurant?: { name: string; is_open: boolean } | null
 }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -57,7 +57,7 @@ export default function ClientAppShell({
         <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-slate-700" onClick={() => {
           if (window.innerWidth < 768) setIsMobileMenuOpen(false)
         }}>
-          <SidebarNav />
+          <SidebarNav role={user.role} />
         </div>
 
         {/* Sidebar Footer User Info */}

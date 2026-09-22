@@ -10,6 +10,7 @@ const navItems = [
   { name: "Menu", href: "/menu", icon: "🍽️" },
   { name: "Categories", href: "/categories", icon: "📁" },
   { name: "Branches", href: "/branches", icon: "🏪" },
+  { name: "Employees", href: "/employees", icon: "🧑‍🍳" },
   { name: "Customer Offers", href: "/customers/offers", icon: "📣" },
   { name: "Printer Settings", href: "/settings/printer", icon: "🖨️" },
   { name: "Redeem Points", href: "/settings/loyalty", icon: "💎" },
@@ -17,12 +18,16 @@ const navItems = [
   { name: "Settings", href: "/settings", icon: "⚙️" },
 ]
 
-export default function SidebarNav() {
+export default function SidebarNav({ role }: { role?: string }) {
   const pathname = usePathname()
+
+  const visibleItems = role === "BRANCH_STAFF"
+    ? navItems.filter((item) => ["/orders", "/menu", "/history"].includes(item.href))
+    : navItems;
 
   return (
     <nav className="flex-1 px-3 py-4 space-y-1">
-      {navItems.map((item) => {
+      {visibleItems.map((item) => {
         const isActive =
           pathname === item.href ||
           (item.href !== "/dashboard" && pathname.startsWith(item.href)) ||

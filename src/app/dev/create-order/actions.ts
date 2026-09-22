@@ -56,7 +56,7 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
       
       const posPaymentMethod = payload.payment_method === "ONLINE" ? PaymentMethod.ONLINE : PaymentMethod.CASH
       
-      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: posPaymentMethod, payment_status: finalPaymentStatus, status: finalStatus, source: OrderSource.POS, items: { create: orderItems }, history: { create: { to_status: finalStatus, reason: "POS session started" } } } })
+      return tx.order.create({ data: { order_number: orderNumber, restaurant_id: payload.restaurant_id, branch_id: branchId, customer_id: customer.id, customer_name_snapshot: customer.name, customer_phone_snapshot: customer.phone, delivery_address_snapshot: address, order_type: payload.order_type, table_number: payload.order_type === OrderType.DINING ? payload.table_number!.trim() : null, client_request_id: payload.client_request_id, subtotal, delivery_fee: deliveryFee, total: subtotal + deliveryFee, payment_method: posPaymentMethod, payment_status: finalPaymentStatus, status: finalStatus, source: OrderSource.POS, assigned_employee_id: session.user.id, items: { create: orderItems }, history: { create: { to_status: finalStatus, reason: "POS session started" } } } })
     })
 
     revalidatePath("/orders")
@@ -82,6 +82,7 @@ export async function completePosOrder(orderId: string, paymentMethod?: "CASH" |
         status: OrderStatus.DELIVERED,
         payment_method: posPaymentMethod,
         payment_status: PaymentStatus.PAID,
+        assigned_employee_id: session.user.id,
         history: {
           create: {
             to_status: OrderStatus.DELIVERED,

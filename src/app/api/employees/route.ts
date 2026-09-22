@@ -62,10 +62,10 @@ export async function POST(request: Request) {
     if (adminError) return adminError
 
     const body = await request.json()
-    const { name, email, password, phone, employee_code, is_active } = body
+    const { name, email, password, phone, is_active } = body
     
-    if (!name || !email || !password || !employee_code) {
-      return NextResponse.json({ error: "Name, email, password and employee code are required" }, { status: 400 })
+    if (!name || !email || !password) {
+      return NextResponse.json({ error: "Name, email and password are required" }, { status: 400 })
     }
 
     const restaurantId = session.user.restaurant_id
@@ -78,14 +78,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Email is already in use" }, { status: 400 })
     }
 
-    // Check if code is already taken in the restaurant
-    const existingCode = await prisma.user.findFirst({
-      where: { restaurant_id: restaurantId, employee_code }
-    })
-    if (existingCode) {
-      return NextResponse.json({ error: "Employee code is already in use in this restaurant" }, { status: 400 })
-    }
-
     const hashedPassword = await bcrypt.hash(password, 10)
 
     const employee = await prisma.user.create({
@@ -94,7 +86,6 @@ export async function POST(request: Request) {
         email,
         phone,
         password_hash: hashedPassword,
-        employee_code,
         role: "BRANCH_STAFF",
         restaurant_id: restaurantId,
         is_active: is_active ?? true,

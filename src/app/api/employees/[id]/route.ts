@@ -18,7 +18,7 @@ export async function PUT(
     if (adminError) return adminError
 
     const body = await request.json()
-    const { name, email, password, phone, employee_code, is_active } = body
+    const { name, email, password, phone, is_active } = body
     
     const restaurantId = session.user.restaurant_id
 
@@ -37,20 +37,10 @@ export async function PUT(
       }
     }
 
-    if (employee_code && employee_code !== existing.employee_code) {
-      const existingCode = await prisma.user.findFirst({
-        where: { restaurant_id: restaurantId, employee_code }
-      })
-      if (existingCode) {
-        return NextResponse.json({ error: "Employee code is already in use in this restaurant" }, { status: 400 })
-      }
-    }
-
     const updateData: any = {
       ...(name !== undefined && { name }),
       ...(email !== undefined && { email }),
       ...(phone !== undefined && { phone }),
-      ...(employee_code !== undefined && { employee_code }),
       ...(is_active !== undefined && { is_active }),
     }
 
@@ -116,7 +106,7 @@ export async function DELETE(
       // Soft delete if they have orders
       await prisma.user.update({
         where: { id: employeeId },
-        data: { is_active: false, employee_code: null } // Clear code to allow reuse
+        data: { is_active: false }
       })
       return NextResponse.json({ success: true, archived: true })
     }

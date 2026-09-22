@@ -16,7 +16,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const { status, reason, employee_code } = await request.json()
+    const { status, reason } = await request.json()
     const restaurantId = session.user.restaurant_id
     const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : {}
 
@@ -55,23 +55,8 @@ export async function PATCH(
       if (status === "IN_PROCESS") {
         updateData.accepted_at = new Date()
         
-        if (!employee_code) {
-          throw new Error("Employee ID is required to accept an order")
-        }
-        
-        const employee = await tx.user.findFirst({
-          where: {
-            restaurant_id: restaurantId,
-            employee_code: employee_code,
-            is_active: true
-          }
-        })
-        
-        if (!employee) {
-          throw new Error("Invalid or inactive Employee ID")
-        }
-        
-        updateData.assigned_employee_id = employee.id
+        // Use authenticated session user as the source of truth
+        updateData.assigned_employee_id = session.user.id
       }
       if (status === "OUT_FOR_DELIVERY") updateData.out_for_delivery_at = new Date()
       if (status === "DELIVERED") {

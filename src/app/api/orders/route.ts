@@ -69,6 +69,11 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
     const body = await request.json()
     const parsed = createOrderSchema.parse(body)
     
@@ -163,6 +168,7 @@ export async function POST(request: Request) {
           payment_method: "COD",
           status: "NEW",
           source: "DEV_CRUD",
+          assigned_employee_id: session.user.id,
           items: {
             create: orderItemsData,
           },

@@ -8,7 +8,6 @@ interface Employee {
   name: string
   email: string
   phone: string | null
-  employee_code: string | null
   is_active: boolean
   total_sales: number
 }
@@ -25,7 +24,6 @@ export default function EmployeesPage() {
     email: "",
     phone: "",
     password: "",
-    employee_code: "",
     is_active: true
   })
   
@@ -57,7 +55,6 @@ export default function EmployeesPage() {
       email: "",
       phone: "",
       password: "",
-      employee_code: Math.floor(1000 + Math.random() * 9000).toString(),
       is_active: true
     })
     setEditingId(null)
@@ -71,7 +68,6 @@ export default function EmployeesPage() {
       email: emp.email,
       phone: emp.phone || "",
       password: "",
-      employee_code: emp.employee_code || "",
       is_active: emp.is_active
     })
     setEditingId(emp.id)
@@ -118,7 +114,7 @@ export default function EmployeesPage() {
       <div className="flex justify-between items-center bg-white p-5 rounded-xl shadow-xs border border-slate-200">
         <div>
           <h1 className="text-xl font-bold text-slate-900 tracking-tight">Staff Management</h1>
-          <p className="text-xs text-slate-500 mt-1">Manage POS access, credentials, and track staff sales performance.</p>
+          <p className="text-xs text-slate-500 mt-1">Manage employee credentials and track sales performance.</p>
         </div>
         <button
           onClick={openCreate}
@@ -143,7 +139,6 @@ export default function EmployeesPage() {
                 <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-medium text-slate-500 uppercase tracking-wider">
                   <th className="py-3 px-4">Employee</th>
                   <th className="py-3 px-4">Contact</th>
-                  <th className="py-3 px-4 text-center">POS PIN Code</th>
                   <th className="py-3 px-4 text-right">Total Sales</th>
                   <th className="py-3 px-4 text-center">Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
@@ -158,15 +153,6 @@ export default function EmployeesPage() {
                     <td className="py-3.5 px-4 text-slate-600">
                       <div>{emp.email}</div>
                       <div>{emp.phone}</div>
-                    </td>
-                    <td className="py-3.5 px-4 text-center">
-                      {emp.employee_code ? (
-                        <span className="font-mono bg-slate-100 px-2 py-1 rounded border border-slate-200 font-semibold tracking-widest text-slate-800">
-                          {emp.employee_code}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
                     </td>
                     <td className="py-3.5 px-4 text-right font-semibold text-indigo-700">
                       ₹{emp.total_sales.toFixed(2)}
@@ -264,17 +250,6 @@ export default function EmployeesPage() {
                 </div>
                 
                 <div className="grid grid-cols-2 gap-3 pt-2">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">POS PIN / ID *</label>
-                    <input
-                      type="text"
-                      required
-                      value={formData.employee_code}
-                      onChange={e => setFormData({...formData, employee_code: e.target.value})}
-                      className="w-full px-3 py-2 text-sm font-mono tracking-widest border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                    />
-                    <p className="text-[10px] text-slate-500 mt-1">Used to accept orders.</p>
-                  </div>
                   <div className="flex flex-col justify-center">
                     <label className="flex items-center gap-2 cursor-pointer pt-4">
                       <input

@@ -59,7 +59,7 @@ type Order = {
 interface OrderDrawerProps {
   orderId: string | null
   onClose: () => void
-  onStatusUpdate: (orderId: string, newStatus: string, reason?: string, employeeCode?: string) => Promise<void>
+  onStatusUpdate: (orderId: string, newStatus: string, reason?: string) => Promise<void>
 }
 
 export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderDrawerProps) {
@@ -68,35 +68,6 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
   const [updating, setUpdating] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
   const [showRejectModal, setShowRejectModal] = useState(false)
-  const [showEmployeeModal, setShowEmployeeModal] = useState(false)
-  const [employeeCode, setEmployeeCode] = useState("")
-  const [employeeName, setEmployeeName] = useState<string | null>(null)
-  const [employeeError, setEmployeeError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (employeeCode.length >= 1) {
-      const timer = setTimeout(async () => {
-        try {
-          const res = await fetch(`/api/employees/verify?code=${employeeCode}`)
-          if (res.ok) {
-            const data = await res.json()
-            setEmployeeName(data.name)
-            setEmployeeError(null)
-          } else {
-            setEmployeeName(null)
-            setEmployeeError("Invalid ID")
-          }
-        } catch {
-          setEmployeeName(null)
-          setEmployeeError("Error checking ID")
-        }
-      }, 300)
-      return () => clearTimeout(timer)
-    } else {
-      setEmployeeName(null)
-      setEmployeeError(null)
-    }
-  }, [employeeCode])
 
   useEffect(() => {
     if (!orderId) {
@@ -146,13 +117,11 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
     if (!order || updating) return
     setUpdating(true)
     try {
-      await onStatusUpdate(order.id, newStatus, newStatus === "REJECTED" ? rejectReason : undefined, newStatus === "IN_PROCESS" ? employeeCode : undefined)
+      await onStatusUpdate(order.id, newStatus, newStatus === "REJECTED" ? rejectReason : undefined)
       await fetchOrderDetails(order.id)
     } finally {
       setUpdating(false)
       setShowRejectModal(false)
-      setShowEmployeeModal(false)
-      setEmployeeCode("")
     }
   }
 
@@ -220,7 +189,7 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
                   <>
                     <button
                       disabled={updating}
-                      onClick={() => setShowEmployeeModal(true)}
+                      onClick={() => handleAction("IN_PROCESS")}
                       className="px-4 py-2 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 shadow-xs transition-colors disabled:opacity-50"
                     >
                       ✓ Accept Order
@@ -297,46 +266,6 @@ export default function OrderDrawer({ orderId, onClose, onStatusUpdate }: OrderD
                     className="px-3 py-1.5 bg-rose-600 text-white font-medium text-xs rounded-lg hover:bg-rose-700"
                   >
                     Confirm Reject
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Employee ID Modal for Acceptance */}
-            {showEmployeeModal && (
-              <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl space-y-3">
-                <label className="block text-xs font-semibold text-indigo-900">Enter your Employee ID to Accept Order</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1024"
-                  value={employeeCode}
-                  onChange={(e) => setEmployeeCode(e.target.value)}
-                  className="w-full p-2 border border-indigo-300 rounded-md text-xs text-slate-900 bg-white"
-                />
-                
-                {employeeName && (
-                  <p className="text-xs font-medium text-emerald-600">👤 Verified: {employeeName}</p>
-                )}
-                {employeeError && (
-                  <p className="text-xs font-medium text-rose-600">{employeeError}</p>
-                )}
-
-                <div className="flex justify-end space-x-2">
-                  <button
-                    onClick={() => {
-                      setShowEmployeeModal(false)
-                      setEmployeeCode("")
-                    }}
-                    className="px-3 py-1.5 bg-slate-200 text-slate-800 font-medium text-xs rounded-lg"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => handleAction("IN_PROCESS")}
-                    disabled={updating || !employeeName}
-                    className="px-3 py-1.5 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                  >
-                    Confirm Acceptance
                   </button>
                 </div>
               </div>

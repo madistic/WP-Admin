@@ -73,14 +73,14 @@ export default function OrderBoard() {
     return () => clearInterval(interval)
   }, [])
 
-  const updateStatus = async (orderId: string, newStatus: string, reason?: string, employeeCode?: string) => {
+  const updateStatus = async (orderId: string, newStatus: string, reason?: string) => {
     if (updatingOrderId) return
     setUpdatingOrderId(orderId)
     try {
       const res = await fetch(`/api/orders/${orderId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus, reason, employee_code: employeeCode }),
+        body: JSON.stringify({ status: newStatus, reason }),
       })
       if (res.ok) {
         await fetchOrders()
@@ -452,11 +452,11 @@ export default function OrderBoard() {
                     >
                       {order.status === "NEW" && (
                         <button
-                          onClick={() => setSelectedOrderId(order.id)}
+                          onClick={() => updateStatus(order.id, "IN_PROCESS")}
                           disabled={updatingOrderId !== null}
                           className="px-3 py-1 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 transition-colors shadow-xs disabled:opacity-50"
                         >
-                          {updatingOrderId === order.id ? "Updating..." : "Review & Accept"}
+                          {updatingOrderId === order.id ? "Updating..." : "Accept"}
                         </button>
                       )}
 

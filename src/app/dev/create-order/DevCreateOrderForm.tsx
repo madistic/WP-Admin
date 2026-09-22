@@ -209,12 +209,12 @@ export default function DevCreateOrderForm({
         </div>
       )}
 
-      <div className="flex justify-between items-end">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Restaurant POS</h1>
           <p className="text-sm text-slate-500 mt-1">{restaurant.name} · Fast order entry</p>
         </div>
-        <div className="flex bg-slate-200 p-1 rounded-lg">
+        <div className="flex bg-slate-200 p-1 rounded-lg w-full sm:w-auto overflow-x-auto">
           <button type="button" onClick={() => { setActiveTab("SESSIONS"); setCart([]) }} className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${activeTab === "SESSIONS" ? "bg-white shadow-sm text-indigo-700" : "text-slate-600 hover:text-slate-900"}`}>
             Active Sessions ({activeSessions.length})
           </button>

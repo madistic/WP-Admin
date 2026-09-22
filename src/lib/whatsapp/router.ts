@@ -449,6 +449,31 @@ async function processIncomingWhatsAppMessageUnlocked(
     return await handleOpenCatalog(restaurant, sender)
   }
 
+  // View Cart
+  if (interactiveId === "action_view_cart" || cleanText === "cart" || cleanText === "view cart") {
+    return await handleViewCart(restaurant, sender)
+  }
+
+  // Search prompt
+  if (interactiveId === "action_search_prompt" || cleanText === "search") {
+    return await handleSearchPrompt(restaurant, sender)
+  }
+
+  // Legacy interactive IDs: category/item selection, quantity steps, commit — redirect to native catalog
+  if (
+    interactiveId.startsWith("cat_") ||
+    interactiveId.startsWith("sel_toggle_") ||
+    interactiveId.startsWith("continue_cat_") ||
+    interactiveId.startsWith("qstep_inc_") ||
+    interactiveId.startsWith("qstep_dec_") ||
+    interactiveId.startsWith("qstep_next_") ||
+    interactiveId.startsWith("qstep_back_") ||
+    interactiveId.startsWith("commit_cat_") ||
+    interactiveId.startsWith("item_")
+  ) {
+    return await handleOpenCatalog(restaurant, sender)
+  }
+
   if (interactiveId === "loc_prompt_address") {
     const cart = await getCartDetails(restaurant.id, sender)
     if (cart) {
@@ -612,7 +637,29 @@ async function processIncomingWhatsAppMessageUnlocked(
     return await handleSearchResults(restaurant, sender, rawText)
   }
 
-  // Default to Initial Greeting
+  // ── SMART FALLBACK ────────────────────────────────────────────────────────
+  // If the customer has no active cart/session and sent an unrecognised message,
+  // do NOT restart the full greeting flow (which spams the catalog).
+  // Instead, send a short "Type Hi to start" nudge.
+  const hasActiveCart = cart && cart.items.length > 0
+  const isInteractiveReply = message.type === "interactive" && interactiveId.length > 0
+
+  if (!hasActiveCart && !isInteractiveReply && rawText.length > 0) {
+    // Brand-new or idle customer with random text — gentle nudge
+    const nudgeText =
+      `👋 Hi there! Type *Hi* to browse our menu and place an order. 🍽️`
+    if (restaurant.whatsapp_phone_number_id) {
+      await sendWhatsAppInteractiveButtons(
+        restaurant.whatsapp_phone_number_id,
+        sender,
+        nudgeText,
+        [{ id: "action_initial_greeting", title: "👋 Say Hi" }]
+      )
+    }
+    return { handled: true, responseText: nudgeText, intent: "idle_nudge" }
+  }
+
+  // Has a cart or unrecognised interactive → show the greeting + catalog
   return await handleInitialGreeting(restaurant, sender)
 }
 
@@ -720,8 +767,6 @@ export async function handleOpenCatalog(
   const { sendWhatsAppTextMessage } = await import("./client")
   await sendWhatsAppTextMessage(restaurant.whatsapp_phone_number_id, sender, errorText)
   return { handled: true, responseText: errorText, intent: "open_catalog_error" }
-
-  return await handleInitialGreeting(restaurant, sender)
 }
 
 export async function handleOpenCatalogCart(

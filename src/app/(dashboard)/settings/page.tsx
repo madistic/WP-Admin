@@ -116,7 +116,7 @@ export default function SettingsPage() {
       {/* Store Status Acceptance Switch */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-4">
         <h2 className="text-sm font-semibold text-slate-900 border-b border-slate-100 pb-3">Online Store Acceptance</h2>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <p className="text-sm font-medium text-slate-900">Ordering Availability Status</p>
             <p className="text-xs text-slate-500 font-normal mt-0.5">

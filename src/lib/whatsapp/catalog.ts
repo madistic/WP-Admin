@@ -222,59 +222,80 @@ async function verifyBatchHandle(
  */
 export async function ensureMetaProductSet(
   catalogId: string,
+  categoryId: string,
   categoryName: string,
+  metaProductSetId: string | null,
   token: string
-): Promise<void> {
-  if (!categoryName || categoryName === "Food & Beverages") return
+): Promise<string | null> {
+  if (!categoryName) return null
 
-  // First, check if a product set with this name already exists
+  // 1. If we have an existing meta_product_set_id, check if it needs a rename
+  if (metaProductSetId) {
+    const getUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${metaProductSetId}?fields=name`
+    try {
+      const getRes = await fetch(getUrl, { headers: { Authorization: `Bearer ${token}` } })
+      if (getRes.ok) {
+        const data = await getRes.json()
+        if (data.name !== categoryName) {
+          // Needs rename
+          const updateUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${metaProductSetId}`
+          await fetch(updateUrl, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: categoryName })
+          })
+          console.log(`[Meta Catalog Set] Renamed product set ${metaProductSetId} to '${categoryName}'`)
+        }
+        return metaProductSetId
+      }
+    } catch (e: any) {
+      console.warn(`[Meta Catalog Set] Failed to verify existing product set ${metaProductSetId}: ${e.message}`)
+    }
+  }
+
+  // 2. Otherwise, check if a product set with this name already exists
   const listUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/product_sets?fields=id,name,filter&limit=100`
-  
   try {
     const res = await fetch(listUrl, { headers: { Authorization: `Bearer ${token}` } })
     const data = await res.json()
-    
     if (res.ok) {
-      const sets = data?.data || []
-      const existing = sets.find((s: any) => s.name === categoryName)
+      const existing = (data?.data || []).find((s: any) => s.name === categoryName)
       if (existing) {
-        return // Set already exists
+        // Update its filter to use categoryId
+        const updateUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${existing.id}`
+        await fetch(updateUrl, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ filter: JSON.stringify({ custom_label_0: { eq: categoryId } }) })
+        })
+        return existing.id
       }
-    } else {
-      console.warn(`[Meta Catalog Set] Failed to list product sets: ${data?.error?.message}`)
     }
   } catch (e: any) {
     console.warn(`[Meta Catalog Set] Exception listing product sets: ${e.message}`)
   }
 
-  // Create the Product Set since it doesn't exist
+  // 3. Create the Product Set
   console.log(`[Meta Catalog Set] Creating product set for category '${categoryName}'...`)
   const createUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/product_sets`
-  const filter = {
-    custom_label_0: { eq: categoryName }
-  }
+  const filter = { custom_label_0: { eq: categoryId } }
 
   try {
     const res = await fetch(createUrl, {
       method: "POST",
-      headers: { 
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        name: categoryName,
-        filter: JSON.stringify(filter)
-      })
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name: categoryName, filter: JSON.stringify(filter) })
     })
-    
     const data = await res.json()
     if (!res.ok) {
       console.warn(`[Meta Catalog Set Error] Failed to create product set '${categoryName}': ${data?.error?.message}`)
-    } else {
-      console.log(`[Meta Catalog Set Success] Created product set '${categoryName}' with ID ${data.id}`)
+      return null
     }
+    console.log(`[Meta Catalog Set Success] Created product set '${categoryName}' with ID ${data.id}`)
+    return data.id
   } catch (e: any) {
     console.warn(`[Meta Catalog Set Error] Exception creating product set: ${e.message}`)
+    return null
   }
 }
 
@@ -559,7 +580,7 @@ export async function syncMenuItemToMetaCatalog(
       brand: item.restaurant.name,
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
-      custom_label_0: item.deleted_at ? "Deleted" : (item.category?.name || "Uncategorized"),
+      custom_label_0: item.deleted_at ? "Deleted" : (item.category?.id || "Uncategorized"),
     }
 
 
@@ -578,9 +599,23 @@ export async function syncMenuItemToMetaCatalog(
     )
     console.log(`[Meta Catalog Sync] Exact Batch Payload for '${item.name}':`, JSON.stringify(batchRequestPayload, null, 2))
 
-    // Ensure the Product Set (category collection) exists
-    if (item.category?.name) {
-      await ensureMetaProductSet(catalogId, item.category.name, token)
+    // Ensure the Product Set (category collection) exists and has correct name
+    if (item.category) {
+      const metaProductSetId = await ensureMetaProductSet(
+        catalogId,
+        item.category.id,
+        item.category.name,
+        item.category.meta_product_set_id,
+        token
+      )
+      
+      // Update the DB if it was created/discovered
+      if (metaProductSetId && metaProductSetId !== item.category.meta_product_set_id) {
+        await prisma.menuCategory.update({
+          where: { id: item.category.id },
+          data: { meta_product_set_id: metaProductSetId }
+        })
+      }
     }
 
     // -----------------------------------------------------------------------
@@ -915,11 +950,25 @@ export async function syncMenuItemVariantToMetaCatalog(
       image_url: publicImageUrl,
       category: item.category?.name || "Food & Beverages",
       item_group_id: retailerIdBase,
-      custom_label_0: item.category?.name || "Uncategorized",
+      custom_label_0: item.category?.id || "Uncategorized",
     }
     // Ensure the Product Set (category collection) exists
-    if (item.category?.name) {
-      await ensureMetaProductSet(catalogId, item.category.name, token)
+    if (item.category) {
+      const metaProductSetId = await ensureMetaProductSet(
+        catalogId,
+        item.category.id,
+        item.category.name,
+        item.category.meta_product_set_id,
+        token
+      )
+      
+      // Update the DB if it was created/discovered
+      if (metaProductSetId && metaProductSetId !== item.category.meta_product_set_id) {
+        await prisma.menuCategory.update({
+          where: { id: item.category.id },
+          data: { meta_product_set_id: metaProductSetId }
+        })
+      }
     }
 
     const batchUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/batch`

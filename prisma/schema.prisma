@@ -241,9 +241,10 @@ model MenuCategory {
   name          String
   description   String?
   sort_order    Int      @default(0)
-  is_active     Boolean  @default(true)
-  created_at    DateTime @default(now())
-  updated_at    DateTime @updatedAt
+  is_active          Boolean   @default(true)
+  meta_product_set_id String?   // ID of the Meta Product Set/Collection
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
 
   restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   items      MenuItem[]

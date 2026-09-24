@@ -38,7 +38,11 @@ export async function POST(request: Request) {
     const catalogId = restaurant?.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
     const token = process.env.WHATSAPP_ACCESS_TOKEN
     if (catalogId && token) {
-      await ensureMetaProductSet(catalogId, category.name, token)
+      const metaId = await ensureMetaProductSet(catalogId, category.id, category.name, category.meta_product_set_id, token)
+      if (metaId && metaId !== category.meta_product_set_id) {
+        await prisma.menuCategory.update({ where: { id: category.id }, data: { meta_product_set_id: metaId } })
+        category.meta_product_set_id = metaId
+      }
     }
 
     return NextResponse.json(category, { status: 201 })
@@ -94,7 +98,10 @@ export async function PUT(request: Request) {
       const catalogId = restaurant?.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
       const token = process.env.WHATSAPP_ACCESS_TOKEN
       if (catalogId && token) {
-        await ensureMetaProductSet(catalogId, updated.name, token)
+        const metaId = await ensureMetaProductSet(catalogId, updated.id, updated.name, updated.meta_product_set_id, token)
+        if (metaId && metaId !== updated.meta_product_set_id) {
+          await prisma.menuCategory.update({ where: { id: updated.id }, data: { meta_product_set_id: metaId } })
+        }
       }
 
       const items = await prisma.menuItem.findMany({
@@ -200,6 +207,23 @@ export async function PATCH(request: Request) {
       if (outsideDuplicate) return NextResponse.json({ error: `Category name '${outsideDuplicate.name}' already exists.` }, { status: 409 })
 
       await prisma.$transaction(names.map((entry) => prisma.menuCategory.update({ where: { id: entry.id }, data: { name: entry.name } })))
+      
+      const restaurant = await prisma.restaurant.findUnique({ where: { id: restaurantId } })
+      const catalogId = restaurant?.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+      const token = process.env.WHATSAPP_ACCESS_TOKEN
+      
+      if (catalogId && token) {
+        for (const entry of names) {
+          const category = categories.find(c => c.id === entry.id)
+          if (category) {
+            const metaId = await ensureMetaProductSet(catalogId, entry.id, entry.name, category.meta_product_set_id, token)
+            if (metaId && metaId !== category.meta_product_set_id) {
+              await prisma.menuCategory.update({ where: { id: entry.id }, data: { meta_product_set_id: metaId } })
+            }
+          }
+        }
+      }
+      
       const itemIds = await prisma.menuItem.findMany({ where: { category_id: { in: categoryIds }, is_active: true, deleted_at: null }, select: { id: true } })
       const syncResults = await Promise.allSettled(itemIds.map((item) => syncMenuItemWithVariants(item.id)))
       const failedSyncs = syncResults.filter((result) => result.status === "rejected" || !result.value.success).length

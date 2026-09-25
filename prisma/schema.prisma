@@ -7,52 +7,53 @@ datasource db {
 }
 
 model Restaurant {
-  id                        String   @id @default(uuid())
-  name                      String
-  slug                      String   @unique
-  logo_url                  String?
-  phone                     String?
-  whatsapp_number           String?
-  email                     String?
-  description               String?
-  address                   String?
-  city                      String?
-  state                     String?
-  pincode                   String?
-  delivery_radius           Float    @default(0)
-  minimum_order             Float    @default(0)
-  delivery_fee              Float    @default(0)
-  printer_settings          String?
-  whatsapp_phone_number_id  String?  @unique
-  whatsapp_catalog_id       String?
-  is_open                   Boolean  @default(true)
+  id                       String  @id @default(uuid())
+  name                     String
+  slug                     String  @unique
+  logo_url                 String?
+  phone                    String?
+  whatsapp_number          String?
+  email                    String?
+  description              String?
+  address                  String?
+  city                     String?
+  state                    String?
+  pincode                  String?
+  delivery_radius          Float   @default(0)
+  minimum_order            Float   @default(0)
+  delivery_fee             Float   @default(0)
+  printer_settings         String?
+  whatsapp_phone_number_id String? @unique
+  whatsapp_catalog_id      String?
+  is_open                  Boolean @default(true)
 
   // Loyalty System
-  loyalty_enabled                  Boolean  @default(false)
-  loyalty_points_value_inr         Float    @default(1.0)
-  loyalty_amount_for_one_point     Float    @default(100.0)
-  loyalty_min_order_value          Float    @default(500.0)
-  loyalty_max_redemption_percent   Float    @default(50.0)
+  loyalty_enabled                Boolean @default(false)
+  loyalty_points_value_inr       Float   @default(1.0)
+  loyalty_amount_for_one_point   Float   @default(100.0)
+  loyalty_min_order_value        Float   @default(500.0)
+  loyalty_max_redemption_percent Float   @default(50.0)
 
   // Customer Engagement
-  google_review_url                String?
+  google_review_url String?
 
-  created_at                DateTime @default(now())
-  updated_at                DateTime @updatedAt
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
 
-  users            User[]
-  branches         Branch[]
-  categories       MenuCategory[]
-  items            MenuItem[]
-  orders           Order[]
-  customers        Customer[]
-  customerNotes    CustomerNote[]
+  users              User[]
+  branches           Branch[]
+  categories         MenuCategory[]
+  items              MenuItem[]
+  orders             Order[]
+  customers          Customer[]
+  customerNotes      CustomerNote[]
   customerActivities CustomerActivity[]
-  customerAddresses CustomerAddress[]
-  pointsLedgers    PointsLedger[]
-  campaignTemplates CustomerCampaignTemplate[]
-  campaigns        CustomerCampaign[]
-  pushSubscriptions PushSubscription[]
+  customerAddresses  CustomerAddress[]
+  pointsLedgers      PointsLedger[]
+  campaignTemplates  CustomerCampaignTemplate[]
+  campaigns          CustomerCampaign[]
+  pushSubscriptions  PushSubscription[]
+  complaints         Complaint[]
 }
 
 model Branch {
@@ -74,15 +75,15 @@ model Branch {
   created_at                   DateTime @default(now())
   updated_at                   DateTime @updatedAt
 
-  restaurant      Restaurant            @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  users           User[]
-  customers       Customer[]
-  customerNotes   CustomerNote[]
+  restaurant         Restaurant               @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  users              User[]
+  customers          Customer[]
+  customerNotes      CustomerNote[]
   customerActivities CustomerActivity[]
-  customerAddresses CustomerAddress[]
-  orders          Order[]
-  carts           WhatsAppCart[]
-  messageReceipts WhatsAppMessageReceipt[]
+  customerAddresses  CustomerAddress[]
+  orders             Order[]
+  carts              WhatsAppCart[]
+  messageReceipts    WhatsAppMessageReceipt[]
 
   @@unique([restaurant_id, code])
   @@index([restaurant_id, is_active])
@@ -117,10 +118,10 @@ model User {
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
-  restaurant Restaurant     @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  branch      Branch?         @relation(fields: [branch_id], references: [id], onDelete: SetNull)
-  staffNotes  CustomerNote[]
-  assigned_orders Order[] @relation("OrderEmployee")
+  restaurant      Restaurant     @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  branch          Branch?        @relation(fields: [branch_id], references: [id], onDelete: SetNull)
+  staffNotes      CustomerNote[]
+  assigned_orders Order[]        @relation("OrderEmployee")
 
   @@index([restaurant_id, branch_id])
   @@index([restaurant_id, role])
@@ -133,7 +134,7 @@ enum UserRole {
 }
 
 model Customer {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   restaurant_id   String
   branch_id       String
   name            String
@@ -144,19 +145,19 @@ model Customer {
   date_of_birth   DateTime?
   gender          String?
   notes           String?
-  points_balance  Int      @default(0)
-  is_active       Boolean  @default(true)
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  points_balance  Int       @default(0)
+  is_active       Boolean   @default(true)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
   last_order_at   DateTime?
 
-  restaurant Restaurant        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  branch     Branch             @relation(fields: [branch_id], references: [id], onDelete: Cascade)
-  addresses  CustomerAddress[]
-  orders     Order[]
-  staffNotes CustomerNote[]
-  activities CustomerActivity[]
-  pointsLedgers PointsLedger[]
+  restaurant       Restaurant         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  branch           Branch             @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  addresses        CustomerAddress[]
+  orders           Order[]
+  staffNotes       CustomerNote[]
+  activities       CustomerActivity[]
+  pointsLedgers    PointsLedger[]
   campaignReceipts CampaignReceipt[]
 
   @@unique([restaurant_id, branch_id, phone])
@@ -165,33 +166,33 @@ model Customer {
 }
 
 model CustomerAddress {
-  id                           String    @id @default(uuid())
-  restaurant_id                String
-  branch_id                    String
-  customer_id                  String
-  address_type                 String    @default("Home") // Home, Work, Other
-  label                        String?
-  recipient_name               String?
-  phone_number                 String?
-  address_line                 String
-  address_line_2               String?
-  landmark                     String?
-  area                         String?
-  city                         String?
-  state                        String?
-  pincode                      String?
-  normalized_address           String?
-  latitude                     Float?
-  longitude                    Float?
-  calculated_distance_km       Float?
-  distance_calculated_at       DateTime?
-  distance_source              String    @default("EXACT") // EXACT | PROVISIONAL
-  geocoding_provider           String?
-  geocoding_metadata           String?
-  delivery_instructions        String?
-  is_default                   Boolean   @default(false)
-  created_at                   DateTime  @default(now())
-  updated_at                   DateTime  @updatedAt
+  id                     String    @id @default(uuid())
+  restaurant_id          String
+  branch_id              String
+  customer_id            String
+  address_type           String    @default("Home") // Home, Work, Other
+  label                  String?
+  recipient_name         String?
+  phone_number           String?
+  address_line           String
+  address_line_2         String?
+  landmark               String?
+  area                   String?
+  city                   String?
+  state                  String?
+  pincode                String?
+  normalized_address     String?
+  latitude               Float?
+  longitude              Float?
+  calculated_distance_km Float?
+  distance_calculated_at DateTime?
+  distance_source        String    @default("EXACT") // EXACT | PROVISIONAL
+  geocoding_provider     String?
+  geocoding_metadata     String?
+  delivery_instructions  String?
+  is_default             Boolean   @default(false)
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
 
   restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   branch     Branch     @relation(fields: [branch_id], references: [id], onDelete: Cascade)
@@ -236,15 +237,15 @@ model CustomerActivity {
 }
 
 model MenuCategory {
-  id            String   @id @default(uuid())
-  restaurant_id String
-  name          String
-  description   String?
-  sort_order    Int      @default(0)
-  is_active          Boolean   @default(true)
-  meta_product_set_id String?   // ID of the Meta Product Set/Collection
-  created_at         DateTime  @default(now())
-  updated_at         DateTime  @updatedAt
+  id                  String   @id @default(uuid())
+  restaurant_id       String
+  name                String
+  description         String?
+  sort_order          Int      @default(0)
+  is_active           Boolean  @default(true)
+  meta_product_set_id String? // ID of the Meta Product Set/Collection
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
 
   restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   items      MenuItem[]
@@ -258,8 +259,8 @@ model MenuItem {
   description        String?
   price              Float
   image_url          String?
-  meta_product_sku   String?   // Meta Commerce Catalog SKU / Retailer ID
-  meta_sync_status   String?   // SYNCED, FAILED, PENDING
+  meta_product_sku   String? // Meta Commerce Catalog SKU / Retailer ID
+  meta_sync_status   String? // SYNCED, FAILED, PENDING
   meta_sync_error    String?
   meta_synced_at     DateTime?
   is_available       Boolean   @default(true)
@@ -274,8 +275,8 @@ model MenuItem {
   created_at         DateTime  @default(now())
   updated_at         DateTime  @updatedAt
 
-  restaurant Restaurant        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  category   MenuCategory      @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  restaurant Restaurant         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  category   MenuCategory       @relation(fields: [category_id], references: [id], onDelete: Cascade)
   variants   MenuItemVariant[]
   addons     MenuItemAddon[]
   orderItems OrderItem[]
@@ -285,7 +286,7 @@ model MenuItem {
 model MenuItemVariant {
   id           String   @id @default(uuid())
   menu_item_id String
-  name         String   // Half, Full, Family
+  name         String // Half, Full, Family
   price        Float
   is_available Boolean  @default(true)
   sort_order   Int      @default(0)
@@ -298,7 +299,7 @@ model MenuItemVariant {
 model MenuItemAddon {
   id           String   @id @default(uuid())
   menu_item_id String
-  name         String   // Extra Cheese, Extra Raita
+  name         String // Extra Cheese, Extra Raita
   price        Float
   is_available Boolean  @default(true)
   created_at   DateTime @default(now())
@@ -308,34 +309,34 @@ model MenuItemAddon {
 }
 
 model Order {
-  id                         String        @id @default(uuid())
-  order_number               String        @unique
-  restaurant_id              String
-  branch_id                  String
-  customer_id                String
-  customer_name_snapshot     String
-  customer_phone_snapshot    String
-  delivery_address_snapshot  String
-  order_type                 OrderType     @default(HOME_DELIVERY)
-  delivery_distance_km       Float?
-  delivery_charge            Float?
-  free_delivery_distance_km  Float?
-  delivery_charge_per_km     Float?
-  table_number               String?
-  client_request_id          String?
-  assigned_employee_id       String?
-  
-  points_earned              Int       @default(0)
-  points_redeemed            Int       @default(0)
-  points_discount_inr        Float     @default(0)
+  id                        String    @id @default(uuid())
+  order_number              String    @unique
+  restaurant_id             String
+  branch_id                 String
+  customer_id               String
+  customer_name_snapshot    String
+  customer_phone_snapshot   String
+  delivery_address_snapshot String
+  order_type                OrderType @default(HOME_DELIVERY)
+  delivery_distance_km      Float?
+  delivery_charge           Float?
+  free_delivery_distance_km Float?
+  delivery_charge_per_km    Float?
+  table_number              String?
+  client_request_id         String?
+  assigned_employee_id      String?
 
-  subtotal                   Float
-  delivery_fee               Float
-  total                      Float
-  payment_method             PaymentMethod @default(COD)
-  payment_status            PaymentStatus @default(PENDING)
-  status                    OrderStatus   @default(NEW)
-  source                    OrderSource   @default(DEV_CRUD)
+  points_earned       Int   @default(0)
+  points_redeemed     Int   @default(0)
+  points_discount_inr Float @default(0)
+
+  subtotal       Float
+  delivery_fee   Float
+  total          Float
+  payment_method PaymentMethod @default(COD)
+  payment_status PaymentStatus @default(PENDING)
+  status         OrderStatus   @default(NEW)
+  source         OrderSource   @default(DEV_CRUD)
 
   created_at          DateTime  @default(now())
   accepted_at         DateTime?
@@ -343,13 +344,13 @@ model Order {
   delivered_at        DateTime?
   updated_at          DateTime  @updatedAt
 
-  restaurant Restaurant           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-  branch     Branch                @relation(fields: [branch_id], references: [id], onDelete: Cascade)
-  customer   Customer             @relation(fields: [customer_id], references: [id], onDelete: Restrict)
-  assigned_employee User?         @relation("OrderEmployee", fields: [assigned_employee_id], references: [id], onDelete: SetNull)
-  items      OrderItem[]
-  history    OrderStatusHistory[]
-  pointsLedgers PointsLedger[]
+  restaurant        Restaurant           @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  branch            Branch               @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  customer          Customer             @relation(fields: [customer_id], references: [id], onDelete: Restrict)
+  assigned_employee User?                @relation("OrderEmployee", fields: [assigned_employee_id], references: [id], onDelete: SetNull)
+  items             OrderItem[]
+  history           OrderStatusHistory[]
+  pointsLedgers     PointsLedger[]
 
   @@unique([restaurant_id, branch_id, client_request_id])
   @@index([restaurant_id, branch_id, created_at])
@@ -397,7 +398,7 @@ model OrderItem {
   item_name_snapshot  String
   unit_price_snapshot Float
   quantity            Int
-  description         String?  // Special instructions (optional)
+  description         String? // Special instructions (optional)
   line_total          Float
   created_at          DateTime @default(now())
 
@@ -406,35 +407,35 @@ model OrderItem {
 }
 
 model OrderStatusHistory {
-  id          String      @id @default(uuid())
+  id          String       @id @default(uuid())
   order_id    String
   from_status OrderStatus?
   to_status   OrderStatus
   changed_by  String?
   reason      String?
-  created_at  DateTime    @default(now())
+  created_at  DateTime     @default(now())
 
   order Order @relation(fields: [order_id], references: [id], onDelete: Cascade)
 }
 
 model WhatsAppCart {
-  id                       String             @id @default(uuid())
+  id                       String     @id @default(uuid())
   restaurant_id            String
   branch_id                String
   customer_whatsapp_number String
-  checkout_step            String?            // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION", etc.
+  checkout_step            String? // "IDLE", "AWAITING_ADDRESS", "AWAITING_CONFIRMATION", etc.
   customer_name            String?
   delivery_address         String?
   order_type               OrderType?
-  applied_points           Int                @default(0)
-  applied_points_discount  Float              @default(0)
+  applied_points           Int        @default(0)
+  applied_points_discount  Float      @default(0)
   processing_message_id    String?
   processing_started_at    DateTime?
-  delivery_quote           String?            // JSON snapshot of DeliveryQuoteResult
-  created_at               DateTime           @default(now())
-  updated_at               DateTime           @updatedAt
+  delivery_quote           String? // JSON snapshot of DeliveryQuoteResult
+  created_at               DateTime   @default(now())
+  updated_at               DateTime   @updatedAt
 
-  branch     Branch                @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  branch     Branch                  @relation(fields: [branch_id], references: [id], onDelete: Cascade)
   items      WhatsAppCartItem[]
   selections CategoryItemSelection[]
 
@@ -443,13 +444,13 @@ model WhatsAppCart {
 }
 
 model WhatsAppMessageReceipt {
-  message_id             String   @id
-  interaction_message_id String   @unique
+  message_id             String    @id
+  interaction_message_id String    @unique
   restaurant_id          String
   branch_id              String
   sender                 String
-  status                 String   @default("PROCESSING")
-  created_at             DateTime @default(now())
+  status                 String    @default("PROCESSING")
+  created_at             DateTime  @default(now())
   completed_at           DateTime?
 
   branch Branch @relation(fields: [branch_id], references: [id], onDelete: Cascade)
@@ -458,14 +459,14 @@ model WhatsAppMessageReceipt {
 }
 
 model CategoryItemSelection {
-  id           String       @id @default(uuid())
+  id           String   @id @default(uuid())
   cart_id      String
   menu_item_id String
-  quantity     Int          @default(1)
+  quantity     Int      @default(1)
   variant_id   String?
-  addons       String?      // JSON array string
-  created_at   DateTime     @default(now())
-  updated_at   DateTime     @updatedAt
+  addons       String? // JSON array string
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
 
   cart WhatsAppCart @relation(fields: [cart_id], references: [id], onDelete: Cascade)
 
@@ -473,32 +474,32 @@ model CategoryItemSelection {
 }
 
 model WhatsAppCartItem {
-  id                    String        @id @default(uuid())
+  id                    String   @id @default(uuid())
   cart_id               String
   menu_item_id          String
   variant_id            String?
-  selected_addons       String?       // JSON array string
-  quantity              Int           @default(1)
+  selected_addons       String? // JSON array string
+  quantity              Int      @default(1)
   unit_price_snapshot   Float
   item_name_snapshot    String
   variant_name_snapshot String?
   special_instructions  String?
-  created_at            DateTime      @default(now())
-  updated_at            DateTime      @updatedAt
+  created_at            DateTime @default(now())
+  updated_at            DateTime @updatedAt
 
-  cart                  WhatsAppCart  @relation(fields: [cart_id], references: [id], onDelete: Cascade)
-  menuItem              MenuItem      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+  cart     WhatsAppCart @relation(fields: [cart_id], references: [id], onDelete: Cascade)
+  menuItem MenuItem     @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
 }
 
 model PointsLedger {
-  id            String   @id @default(uuid())
+  id            String                @id @default(uuid())
   customer_id   String
   restaurant_id String
   order_id      String?
   type          PointsTransactionType
   points        Int
   reason        String
-  created_at    DateTime @default(now())
+  created_at    DateTime              @default(now())
 
   customer   Customer   @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
@@ -534,31 +535,31 @@ model CustomerCampaignTemplate {
 }
 
 model CustomerCampaign {
-  id                   String   @id @default(uuid())
+  id                   String    @id @default(uuid())
   restaurant_id        String
   name                 String
   message_template     String
-  segment              String   // "ALL", "LOYAL", "INACTIVE", "REGULAR", "NEVER_PURCHASED"
-  status               String   @default("DRAFT") // DRAFT, SENDING, COMPLETED
-  total_sent           Int      @default(0)
-  is_automated         Boolean  @default(false)
-  automation_condition String?  // e.g. "INACTIVE_30_DAYS"
-  automation_schedule  String?  // cron string
+  segment              String // "ALL", "LOYAL", "INACTIVE", "REGULAR", "NEVER_PURCHASED"
+  status               String    @default("DRAFT") // DRAFT, SENDING, COMPLETED
+  total_sent           Int       @default(0)
+  is_automated         Boolean   @default(false)
+  automation_condition String? // e.g. "INACTIVE_30_DAYS"
+  automation_schedule  String? // cron string
   last_run_at          DateTime?
-  created_at           DateTime @default(now())
-  updated_at           DateTime @updatedAt
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
 
-  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  restaurant Restaurant        @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
   receipts   CampaignReceipt[]
 
   @@index([restaurant_id])
 }
 
 model CampaignReceipt {
-  id             String   @id @default(uuid())
-  campaign_id    String
-  customer_id    String
-  sent_at        DateTime @default(now())
+  id          String   @id @default(uuid())
+  campaign_id String
+  customer_id String
+  sent_at     DateTime @default(now())
 
   campaign CustomerCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
   customer Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
@@ -566,4 +567,32 @@ model CampaignReceipt {
   @@unique([campaign_id, customer_id]) // Prevent duplicate sends
   @@index([campaign_id])
   @@index([customer_id])
+}
+
+// ─────────────────────────────────────────────
+// Restaurant Complaints & Support System
+// ─────────────────────────────────────────────
+
+enum ComplaintStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model Complaint {
+  id            String          @id @default(uuid())
+  restaurant_id String
+  subject       String
+  description   String          @db.Text
+  status        ComplaintStatus @default(OPEN)
+  response      String?         @db.Text
+  created_at    DateTime        @default(now())
+  updated_at    DateTime        @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@index([restaurant_id])
+  @@index([restaurant_id, status])
+  @@index([status])
 }

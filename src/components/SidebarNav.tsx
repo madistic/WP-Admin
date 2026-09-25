@@ -16,6 +16,7 @@ const navItems = [
   { name: "Redeem Points", href: "/settings/loyalty", icon: "💎" },
   { name: "History", href: "/history", icon: "📜" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
+  { name: "Complaints", href: "/complaints", icon: "💬" },
 ]
 
 export default function SidebarNav({ role }: { role?: string }) {

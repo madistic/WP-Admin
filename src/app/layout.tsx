@@ -9,7 +9,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "RestoPro - Restaurant Owner Portal",
+  title: "RestroConnect - Restaurant Owner Portal",
   description: "Multi-tenant Restaurant Management System & Analytics Portal",
 };
 

@@ -1,7 +1,7 @@
-# RESTOPRO — COMPLETE SOURCE CODE, SYSTEM ARCHITECTURE & DATABASE TECHNICAL REPORT
+# RestroConnect — COMPLETE SOURCE CODE, SYSTEM ARCHITECTURE & DATABASE TECHNICAL REPORT
 
 ## 1. PROJECT OVERVIEW
-**Project Purpose:** RESTOPRO is a full-featured restaurant management, Point of Sale (POS), and customer engagement platform. Its primary goal is to manage multi-branch restaurant operations, unify offline POS and online WhatsApp orders, and provide built-in Customer Relationship Management (CRM) and loyalty programs.
+**Project Purpose:** RestroConnect is a full-featured restaurant management, Point of Sale (POS), and customer engagement platform. Its primary goal is to manage multi-branch restaurant operations, unify offline POS and online WhatsApp orders, and provide built-in Customer Relationship Management (CRM) and loyalty programs.
 
 **Current Architecture:** 
 The application uses a modern Server-Side Rendered (SSR) architecture built on Next.js 14/15 App Router. It acts as both the backend API and the frontend dashboard. 

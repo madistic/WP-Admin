@@ -28,7 +28,7 @@ export interface WhatsAppItemFormat {
 }
 
 /**
- * Converts RESTOPRO category data into WhatsApp list / menu format.
+ * Converts RestroConnect category data into WhatsApp list / menu format.
  */
 export function formatCategoriesForWhatsApp(categories: Array<{ id: string; name: string; description?: string | null; _count?: { items: number } }>): WhatsAppCategoryFormat[] {
   return categories.map((cat) => ({
@@ -40,7 +40,7 @@ export function formatCategoriesForWhatsApp(categories: Array<{ id: string; name
 }
 
 /**
- * Converts RESTOPRO item data into WhatsApp product card format.
+ * Converts RestroConnect item data into WhatsApp product card format.
  */
 export function formatItemsForWhatsApp(items: Array<any>): WhatsAppItemFormat[] {
   return items.map((item) => ({

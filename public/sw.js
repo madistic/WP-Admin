@@ -1,4 +1,4 @@
-﻿// RestoPro Push Notification Service Worker
+// RestroConnect Push Notification Service Worker
 // Handles incoming push events and shows native OS notifications.
 
 self.addEventListener("push", function (event) {

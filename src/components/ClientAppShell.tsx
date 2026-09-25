@@ -36,11 +36,11 @@ export default function ClientAppShell({
         <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
           <Link href="/dashboard" className="flex items-center gap-2" onClick={() => setIsMobileMenuOpen(false)}>
             <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white text-sm shadow-sm">
-              RP
+              RC
             </div>
             <div>
               <h1 className="text-base font-semibold tracking-wide text-white leading-tight">
-                RESTO<span className="text-indigo-400 font-bold">PRO</span>
+                Restro<span className="text-indigo-400 font-bold">Connect</span>
               </h1>
               <p className="text-[10px] text-slate-400 font-medium">Owner Management</p>
             </div>
@@ -91,7 +91,7 @@ export default function ClientAppShell({
 
             <div className="md:hidden flex items-center gap-2">
               <h1 className="text-base font-semibold tracking-wider">
-                RESTO<span className="text-indigo-600">PRO</span>
+                Restro<span className="text-indigo-600">Connect</span>
               </h1>
             </div>
 

@@ -15,7 +15,7 @@ export default async function Home() {
           🍽️
         </div>
         <h1 className="text-3xl font-extrabold text-gray-900">
-          Resto<span className="text-indigo-600">Pro</span> Platform
+          Restro<span className="text-indigo-600">Connect</span> Platform
         </h1>
         <p className="text-gray-600 text-sm">
           Multi-tenant Restaurant Owner Management System with automated order workflows.

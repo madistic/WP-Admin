@@ -43,9 +43,9 @@ export async function POST(request: Request) {
 
     const restaurantId = session.user.restaurant_id
 
-    // Validate category belongs to this restaurant
+    // Validate category belongs to this restaurant and is not deleted
     const categoryExists = await prisma.menuCategory.findFirst({
-      where: { id: category_id, restaurant_id: restaurantId },
+      where: { id: category_id, restaurant_id: restaurantId, deleted_at: null },
     })
     if (!categoryExists) {
       return NextResponse.json({ error: "Category does not exist for this restaurant" }, { status: 400 })

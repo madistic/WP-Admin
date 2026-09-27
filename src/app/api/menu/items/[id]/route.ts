@@ -37,6 +37,15 @@ export async function PUT(
 
     if (!existing) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
 
+    if (body.category_id !== undefined) {
+      const categoryExists = await prisma.menuCategory.findFirst({
+        where: { id: body.category_id, restaurant_id: restaurantId, deleted_at: null },
+      })
+      if (!categoryExists) {
+        return NextResponse.json({ error: "Category does not exist for this restaurant" }, { status: 400 })
+      }
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const item = await tx.menuItem.update({
         where: { id: itemId },

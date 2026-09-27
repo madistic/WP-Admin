@@ -18,11 +18,17 @@ export async function POST(request: Request) {
     const restaurantId = session.user.restaurant_id
 
     const duplicate = await prisma.menuCategory.findFirst({
-      where: { restaurant_id: restaurantId, name: { equals: name.trim(), mode: "insensitive" } },
+      where: {
+        restaurant_id: restaurantId,
+        name: { equals: name.trim(), mode: "insensitive" },
+        deleted_at: null,
+      },
     })
     if (duplicate) return NextResponse.json({ error: "A category with this name already exists." }, { status: 409 })
 
-    const count = await prisma.menuCategory.count({ where: { restaurant_id: restaurantId } })
+    const count = await prisma.menuCategory.count({
+      where: { restaurant_id: restaurantId, deleted_at: null },
+    })
 
     const category = await prisma.menuCategory.create({
       data: {
@@ -65,7 +71,7 @@ export async function PUT(request: Request) {
     const restaurantId = session.user.restaurant_id
 
     const existing = await prisma.menuCategory.findFirst({
-      where: { id, restaurant_id: restaurantId },
+      where: { id, restaurant_id: restaurantId, deleted_at: null },
     })
 
     if (!existing) return NextResponse.json({ error: "Category not found" }, { status: 404 })
@@ -77,6 +83,7 @@ export async function PUT(request: Request) {
         where: {
           restaurant_id: restaurantId,
           name: { equals: normalizedName, mode: "insensitive" },
+          deleted_at: null,
           NOT: { id },
         },
       })
@@ -131,7 +138,7 @@ export async function DELETE(request: Request) {
     const restaurantId = session.user.restaurant_id
 
     const category = await prisma.menuCategory.findFirst({
-      where: { id, restaurant_id: restaurantId },
+      where: { id, restaurant_id: restaurantId, deleted_at: null },
     })
 
     if (!category) return NextResponse.json({ error: "Category not found" }, { status: 404 })
@@ -152,11 +159,29 @@ export async function DELETE(request: Request) {
       )
     }
 
+    // Check if category has any historical / soft-deleted items
+    const totalItemCount = await prisma.menuItem.count({
+      where: { category_id: id },
+    })
+
+    if (totalItemCount > 0) {
+      // Archive / soft-delete category to preserve historical MenuItems & OrderItem references
+      await prisma.menuCategory.update({
+        where: { id },
+        data: {
+          is_active: false,
+          deleted_at: new Date(),
+        },
+      })
+      return NextResponse.json({ success: true, archived: true })
+    }
+
+    // No menu items reference this category at all; safe to physically delete
     await prisma.menuCategory.delete({
       where: { id },
     })
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, archived: false })
   } catch (error: unknown) {
     console.error("Delete Category Error:", error)
     return NextResponse.json({ error: error instanceof Error ? error.message : "Failed to delete category" }, { status: 500 })
@@ -175,7 +200,7 @@ export async function PATCH(request: Request) {
 
     const restaurantId = session.user.restaurant_id
     const categories = await prisma.menuCategory.findMany({
-      where: { id: { in: categoryIds }, restaurant_id: restaurantId },
+      where: { id: { in: categoryIds }, restaurant_id: restaurantId, deleted_at: null },
     })
     if (categories.length !== categoryIds.length) return NextResponse.json({ error: "One or more categories were not found." }, { status: 404 })
 
@@ -187,8 +212,38 @@ export async function PATCH(request: Request) {
       if (activeItemCount > 0) {
         return NextResponse.json({ error: `Cannot delete selected categories: ${activeItemCount} active menu item(s) are still assigned. Move or delete items first.`, affectedItems: activeItemCount }, { status: 409 })
       }
-      const result = await prisma.menuCategory.deleteMany({ where: { id: { in: categoryIds }, restaurant_id: restaurantId } })
-      return NextResponse.json({ success: true, action, count: result.count })
+
+      // Identify which categories have historical items
+      const categoriesWithItems = await prisma.menuItem.findMany({
+        where: { category_id: { in: categoryIds } },
+        select: { category_id: true },
+        distinct: ["category_id"],
+      })
+      const idsWithHistoricalItems = categoriesWithItems.map((c) => c.category_id)
+      const idsWithoutItems = categoryIds.filter((id: string) => !idsWithHistoricalItems.includes(id))
+
+      let archivedCount = 0
+      let deletedCount = 0
+
+      if (idsWithHistoricalItems.length > 0) {
+        const archived = await prisma.menuCategory.updateMany({
+          where: { id: { in: idsWithHistoricalItems }, restaurant_id: restaurantId },
+          data: {
+            is_active: false,
+            deleted_at: new Date(),
+          },
+        })
+        archivedCount = archived.count
+      }
+
+      if (idsWithoutItems.length > 0) {
+        const deleted = await prisma.menuCategory.deleteMany({
+          where: { id: { in: idsWithoutItems }, restaurant_id: restaurantId },
+        })
+        deletedCount = deleted.count
+      }
+
+      return NextResponse.json({ success: true, action, count: archivedCount + deletedCount, archivedCount, deletedCount })
     }
 
     if (action === "rename") {
@@ -202,7 +257,12 @@ export async function PATCH(request: Request) {
       const normalizedNames = names.map((entry) => entry.name.toLowerCase())
       if (new Set(normalizedNames).size !== normalizedNames.length) return NextResponse.json({ error: "Bulk rename names must be unique." }, { status: 409 })
       const outsideDuplicate = await prisma.menuCategory.findFirst({
-        where: { restaurant_id: restaurantId, name: { in: names.map((entry) => entry.name), mode: "insensitive" }, NOT: { id: { in: categoryIds } } },
+        where: {
+          restaurant_id: restaurantId,
+          name: { in: names.map((entry) => entry.name), mode: "insensitive" },
+          deleted_at: null,
+          NOT: { id: { in: categoryIds } },
+        },
       })
       if (outsideDuplicate) return NextResponse.json({ error: `Category name '${outsideDuplicate.name}' already exists.` }, { status: 409 })
 
@@ -214,7 +274,7 @@ export async function PATCH(request: Request) {
       
       if (catalogId && token) {
         for (const entry of names) {
-          const category = categories.find(c => c.id === entry.id)
+          const category = categories.find((c) => c.id === entry.id)
           if (category) {
             const metaId = await ensureMetaProductSet(catalogId, entry.id, entry.name, category.meta_product_set_id, token)
             if (metaId && metaId !== category.meta_product_set_id) {
@@ -233,7 +293,7 @@ export async function PATCH(request: Request) {
     if (action === "move") {
       const targetCategoryId = typeof body.target_category_id === "string" ? body.target_category_id : ""
       if (!targetCategoryId || categoryIds.includes(targetCategoryId)) return NextResponse.json({ error: "Choose a different destination category." }, { status: 400 })
-      const targetCategory = await prisma.menuCategory.findFirst({ where: { id: targetCategoryId, restaurant_id: restaurantId } })
+      const targetCategory = await prisma.menuCategory.findFirst({ where: { id: targetCategoryId, restaurant_id: restaurantId, deleted_at: null } })
       if (!targetCategory) return NextResponse.json({ error: "Destination category not found." }, { status: 404 })
       const items = await prisma.menuItem.findMany({ where: { category_id: { in: categoryIds }, restaurant_id: restaurantId }, select: { id: true } })
       const result = await prisma.$transaction(async (tx) => tx.menuItem.updateMany({ where: { category_id: { in: categoryIds }, restaurant_id: restaurantId }, data: { category_id: targetCategoryId } }))

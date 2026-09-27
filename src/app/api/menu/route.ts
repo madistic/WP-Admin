@@ -30,7 +30,7 @@ export async function GET() {
 
     // 2. Fetch all categories sorted by display order
     const categories = await prisma.menuCategory.findMany({
-      where: { restaurant_id: restaurantId },
+      where: { restaurant_id: restaurantId, deleted_at: null },
       orderBy: { sort_order: "asc" },
       include: {
         _count: { 

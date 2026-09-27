@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     // Cache categories to avoid repeated DB calls
     const categoriesCache = new Map<string, string>()
     const existingCats = await prisma.menuCategory.findMany({
-      where: { restaurant_id: restaurantId }
+      where: { restaurant_id: restaurantId, deleted_at: null },
     })
     for (const cat of existingCats) {
       categoriesCache.set(cat.name.toLowerCase(), cat.id)

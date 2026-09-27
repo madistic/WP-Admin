@@ -38,6 +38,7 @@ export async function getMenuCategories(restaurantId: string) {
     where: {
       restaurant_id: restaurantId,
       is_active: true,
+      deleted_at: null,
     },
     orderBy: { sort_order: "asc" },
     select: {

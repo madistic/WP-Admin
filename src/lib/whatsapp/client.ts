@@ -69,6 +69,26 @@ export interface WhatsAppImageMessagePayload {
   }
 }
 
+export interface WhatsAppInteractiveCtaUrlPayload {
+  messaging_product: "whatsapp"
+  recipient_type: "individual"
+  to: string
+  type: "interactive"
+  interactive: {
+    type: "cta_url"
+    header?: { type: "text"; text: string } | { type: "image"; image: { link: string } }
+    body: { text: string }
+    footer?: { text: string }
+    action: {
+      name: "cta_url"
+      parameters: {
+        display_text: string
+        url: string
+      }
+    }
+  }
+}
+
 /**
  * Sends an outbound message via Meta WhatsApp Cloud API.
  * Uses process.env.WHATSAPP_ACCESS_TOKEN.
@@ -76,7 +96,13 @@ export interface WhatsAppImageMessagePayload {
  */
 export async function sendWhatsAppCloudMessage(
   phoneNumberId: string,
-  payload: WhatsAppTextMessagePayload | WhatsAppInteractiveListPayload | WhatsAppInteractiveButtonsPayload | WhatsAppImageMessagePayload
+  payload:
+    | WhatsAppTextMessagePayload
+    | WhatsAppInteractiveListPayload
+    | WhatsAppInteractiveButtonsPayload
+    | WhatsAppImageMessagePayload
+    | WhatsAppInteractiveCtaUrlPayload
+    | any
 ): Promise<{ success: boolean; response?: any; mock?: boolean }> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN
 
@@ -321,3 +347,47 @@ export async function sendWhatsAppMultiProductList(
 
   return await sendWhatsAppCloudMessage(phoneNumberId, payload)
 }
+
+/**
+ * Sends an interactive CTA URL button message (opens external URL directly on tap).
+ */
+export async function sendWhatsAppCtaUrlButton(
+  phoneNumberId: string,
+  to: string,
+  bodyText: string,
+  displayText: string,
+  url: string,
+  options?: { headerText?: string; headerImageUrl?: string; footerText?: string }
+) {
+  const formattedUrl = url.startsWith("http://") || url.startsWith("https://") ? url : `https://${url}`
+
+  const payload: WhatsAppInteractiveCtaUrlPayload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "cta_url",
+      body: { text: bodyText },
+      action: {
+        name: "cta_url",
+        parameters: {
+          display_text: displayText.slice(0, 20),
+          url: formattedUrl,
+        },
+      },
+    },
+  }
+
+  if (options?.headerImageUrl) {
+    payload.interactive.header = { type: "image", image: { link: options.headerImageUrl } }
+  } else if (options?.headerText) {
+    payload.interactive.header = { type: "text", text: options.headerText }
+  }
+  if (options?.footerText) {
+    payload.interactive.footer = { text: options.footerText }
+  }
+
+  return await sendWhatsAppCloudMessage(phoneNumberId, payload)
+}
+

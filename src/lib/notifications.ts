@@ -1,5 +1,5 @@
 import { Order } from "@prisma/client"
-import { sendWhatsAppTextMessage } from "./whatsapp/client"
+import { sendWhatsAppTextMessage, sendWhatsAppCtaUrlButton } from "./whatsapp/client"
 import prisma from "./prisma"
 import { CUSTOMER_BRAND_NAME } from "./whatsapp/branding"
 
@@ -66,15 +66,21 @@ export class WhatsAppNotificationProvider implements NotificationProvider {
     const { phoneId, googleReviewUrl } = await this.getRestaurantMeta(order.restaurant_id)
     if (!phoneId) return
 
-    // Only append the Google Review link for HOME_DELIVERY orders (not POS / TAKEAWAY / DINING)
-    const isHomeDelivery = order.order_type === "HOME_DELIVERY"
-    const reviewMessage =
-      isHomeDelivery && googleReviewUrl
-        ? `\n\n⭐ *Enjoyed your meal?*\nLeave us a Google review — it means the world to us! 🙏\n👉 ${googleReviewUrl}`
-        : ""
-
-    const text = `✅ *Delivered!*\nYour order #${order.order_number} from *${CUSTOMER_BRAND_NAME}* has arrived. Enjoy every bite! 🍽️${reviewMessage}`
+    // 1. Delivery confirmation message (raw URL removed from body)
+    const text = `✅ *Delivered!*\nYour order #${order.order_number} from *${CUSTOMER_BRAND_NAME}* has arrived. Enjoy every bite! 🍽️`
     await sendWhatsAppTextMessage(phoneId, customerPhone, text)
+
+    // 2. After delivered message: show interactive Google Review CTA button
+    const isHomeDelivery = !order.order_type || order.order_type === "HOME_DELIVERY"
+    if (isHomeDelivery && googleReviewUrl) {
+      await sendWhatsAppCtaUrlButton(
+        phoneId,
+        customerPhone,
+        "⭐ Enjoyed your meal?",
+        "⭐ Rate Us",
+        googleReviewUrl
+      )
+    }
   }
 
   async sendOrderRejected(order: Order, customerPhone: string, reason?: string) {

@@ -54,6 +54,8 @@ model Restaurant {
   campaigns          CustomerCampaign[]
   pushSubscriptions  PushSubscription[]
   complaints         Complaint[]
+  inventoryItems        InventoryItem[]
+  inventoryTransactions InventoryTransaction[]
 }
 
 model Branch {
@@ -84,6 +86,8 @@ model Branch {
   orders             Order[]
   carts              WhatsAppCart[]
   messageReceipts    WhatsAppMessageReceipt[]
+  inventoryItems        InventoryItem[]
+  inventoryTransactions InventoryTransaction[]
 
   @@unique([restaurant_id, code])
   @@index([restaurant_id, is_active])
@@ -281,6 +285,7 @@ model MenuItem {
   addons     MenuItemAddon[]
   orderItems OrderItem[]
   cartItems  WhatsAppCartItem[]
+  ingredients MenuItemIngredient[]
 }
 
 model MenuItemVariant {
@@ -351,6 +356,7 @@ model Order {
   items             OrderItem[]
   history           OrderStatusHistory[]
   pointsLedgers     PointsLedger[]
+  inventoryTransactions InventoryTransaction[]
 
   @@unique([restaurant_id, branch_id, client_request_id])
   @@index([restaurant_id, branch_id, created_at])
@@ -595,4 +601,89 @@ model Complaint {
   @@index([restaurant_id])
   @@index([restaurant_id, status])
   @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// Inventory & Recipe Ingredients System
+// ─────────────────────────────────────────────
+
+enum InventoryTransactionType {
+  OPENING
+  PURCHASE
+  ADJUSTMENT
+  WASTAGE
+  ORDER_DEDUCTION
+  REVERSAL
+}
+
+model InventoryItem {
+  id            String   @id @default(uuid())
+  restaurant_id String
+  branch_id     String?
+  name          String
+  quantity      Decimal  @default(0) @db.Decimal(12, 3)
+  unit          String   // mg, g, kg, ml, L, piece, etc.
+  opening_stock Decimal  @default(0) @db.Decimal(12, 3)
+  minimum_stock Decimal  @default(0) @db.Decimal(12, 3)
+  reorder_level Decimal  @default(0) @db.Decimal(12, 3)
+  cost_per_unit Decimal? @db.Decimal(10, 2)
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  restaurant   Restaurant             @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  branch       Branch?                @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  ingredients  MenuItemIngredient[]
+  transactions InventoryTransaction[]
+
+  @@index([restaurant_id])
+  @@index([branch_id])
+  @@index([restaurant_id, branch_id])
+  @@index([restaurant_id, is_active])
+}
+
+model MenuItemIngredient {
+  id                String   @id @default(uuid())
+  menu_item_id      String
+  inventory_item_id String
+  quantity          Decimal  @db.Decimal(12, 3)
+  unit              String
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  menuItem      MenuItem      @relation(fields: [menu_item_id], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventory_item_id], references: [id], onDelete: Cascade)
+
+  @@unique([menu_item_id, inventory_item_id])
+  @@index([menu_item_id])
+  @@index([inventory_item_id])
+}
+
+model InventoryTransaction {
+  id                String                   @id @default(uuid())
+  restaurant_id     String
+  branch_id         String?
+  inventory_item_id String
+  order_id          String?
+  type              InventoryTransactionType
+  quantity          Decimal                  @db.Decimal(12, 3)
+  previous_quantity Decimal?                 @db.Decimal(12, 3)
+  new_quantity      Decimal?                 @db.Decimal(12, 3)
+  unit_cost         Decimal?                 @db.Decimal(10, 2)
+  total_cost        Decimal?                 @db.Decimal(12, 2)
+  reason            String?
+  created_by        String?
+  created_at        DateTime                 @default(now())
+
+  restaurant    Restaurant    @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  branch        Branch?       @relation(fields: [branch_id], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventory_item_id], references: [id], onDelete: Cascade)
+  order         Order?        @relation(fields: [order_id], references: [id], onDelete: SetNull)
+
+  @@index([restaurant_id])
+  @@index([branch_id])
+  @@index([inventory_item_id])
+  @@index([order_id])
+  @@index([restaurant_id, created_at])
+  @@index([type])
 }

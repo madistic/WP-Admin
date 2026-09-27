@@ -41,6 +41,10 @@ export default function AnalyticsDashboard() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [metricTab, setMetricTab] = useState<"revenue" | "orders">("revenue")
 
+  const [dashboardTab, setDashboardTab] = useState<"business" | "inventory">("business")
+  const [inventoryData, setInventoryData] = useState<any>(null)
+  const [inventoryLoading, setInventoryLoading] = useState(false)
+
   const fetchAnalytics = async () => {
     try {
       setLoading(true)
@@ -60,11 +64,43 @@ export default function AnalyticsDashboard() {
     }
   }
 
+  const fetchInventoryAnalytics = async () => {
+    try {
+      setInventoryLoading(true)
+      let url = `/api/inventory/analytics?range=${range}`
+      if (range === "CUSTOM") {
+        url += `&startDate=${startDate}&endDate=${endDate}`
+      }
+      const res = await fetch(url)
+      if (res.ok) {
+        const json = await res.json()
+        setInventoryData(json)
+      }
+    } catch (e) {
+      console.error("Failed to fetch inventory analytics data", e)
+    } finally {
+      setInventoryLoading(false)
+    }
+  }
+
   useEffect(() => {
-    fetchAnalytics()
-    const interval = setInterval(fetchAnalytics, 15000)
+    if (dashboardTab === "inventory") {
+      fetchInventoryAnalytics()
+    } else {
+      fetchAnalytics()
+    }
+  }, [range, startDate, endDate, dashboardTab])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (dashboardTab === "inventory") {
+        fetchInventoryAnalytics()
+      } else {
+        fetchAnalytics()
+      }
+    }, 15000)
     return () => clearInterval(interval)
-  }, [range, startDate, endDate])
+  }, [range, startDate, endDate, dashboardTab])
 
   const generatePDFReport = () => {
     if (!data) return
@@ -244,7 +280,35 @@ export default function AnalyticsDashboard() {
         </div>
       </div>
 
-      {/* 2. Live Operations Summary Ribbon */}
+      {/* View Switcher Tabs: Sales Analytics vs Inventory Analytics */}
+      <div className="flex border-b border-slate-200 gap-6">
+        <button
+          onClick={() => setDashboardTab("business")}
+          className={`pb-2.5 text-sm font-medium transition-colors relative flex items-center gap-2 ${
+            dashboardTab === "business"
+              ? "text-indigo-600 font-semibold border-b-2 border-indigo-600"
+              : "text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <span>📊</span>
+          <span>Sales & Operations</span>
+        </button>
+        <button
+          onClick={() => setDashboardTab("inventory")}
+          className={`pb-2.5 text-sm font-medium transition-colors relative flex items-center gap-2 ${
+            dashboardTab === "inventory"
+              ? "text-indigo-600 font-semibold border-b-2 border-indigo-600"
+              : "text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <span>🥫</span>
+          <span>Inventory & Recipe Analytics</span>
+        </button>
+      </div>
+
+      {dashboardTab === "business" ? (
+        <>
+          {/* 2. Live Operations Summary Ribbon */}
       <div className="bg-slate-900 text-white p-3.5 rounded-xl shadow-xs flex flex-wrap justify-between items-center gap-3">
         <div className="flex items-center gap-4">
           <span className="text-xs font-medium text-slate-400">Kitchen Status Pipeline:</span>
@@ -558,12 +622,268 @@ export default function AnalyticsDashboard() {
           </table>
         </div>
       </div>
+    </>
+  ) : (
+    /* ─────────────────────────────────────────────────────────────
+        INVENTORY & RECIPE ANALYTICS VIEW
+        ───────────────────────────────────────────────────────────── */
+    <div className="space-y-6">
+      {inventoryLoading ? (
+        <div className="py-20 text-center text-slate-400 text-xs">
+          <span className="animate-spin inline-block w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full mb-2" />
+          <p>Calculating inventory metrics and ingredient consumption...</p>
+        </div>
+      ) : (
+        <>
+          {/* Inventory KPI Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
+              <p className="text-xs font-medium text-slate-500">Live Inventory Valuation</p>
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-2xl font-semibold text-emerald-700">
+                  ₹{inventoryData?.summary?.total_valuation?.toLocaleString() || 0}
+                </h3>
+                <span className="text-xs font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                  Current Stock
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Total items: {inventoryData?.summary?.total_items || 0}</p>
+            </div>
 
-      <OrderDrawer
-        orderId={selectedOrderId}
-        onClose={() => setSelectedOrderId(null)}
-        onStatusUpdate={async () => fetchAnalytics()}
-      />
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
+              <p className="text-xs font-medium text-slate-500">Stock Consumed (Period)</p>
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-2xl font-semibold text-indigo-700">
+                  ₹{inventoryData?.summary?.consumed_cost?.toLocaleString() || 0}
+                </h3>
+                <span className="text-xs font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
+                  {inventoryData?.summary?.consumed_quantity || 0} units
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Deducted from WhatsApp & POS orders</p>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
+              <p className="text-xs font-medium text-slate-500">Wastage & Spoilage</p>
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-2xl font-semibold text-rose-600">
+                  ₹{inventoryData?.summary?.wastage_cost?.toLocaleString() || 0}
+                </h3>
+                <span className="text-xs font-medium text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full">
+                  {inventoryData?.summary?.wastage_quantity || 0} units
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Recorded wastage entries</p>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-1">
+              <p className="text-xs font-medium text-slate-500">Stock Shortages Alert</p>
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-2xl font-semibold text-amber-600">
+                  {(inventoryData?.summary?.low_stock_count || 0) + (inventoryData?.summary?.out_of_stock_count || 0)}
+                </h3>
+                <span className="text-xs font-medium text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full">
+                  {inventoryData?.summary?.out_of_stock_count || 0} out of stock
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">{inventoryData?.summary?.low_stock_count || 0} at reorder level</p>
+            </div>
+          </div>
+
+          {/* Low Stock & Shortage Warning Box */}
+          {((inventoryData?.low_stock_items?.length || 0) > 0 || (inventoryData?.out_of_stock_items?.length || 0) > 0) && (
+            <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">⚠️</span>
+                  <span className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                    Critical Inventory Restock Required
+                  </span>
+                </div>
+                <Link
+                  href="/inventory"
+                  className="text-xs font-semibold text-amber-900 hover:text-amber-950 underline"
+                >
+                  Restock via Inventory &rarr;
+                </Link>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {inventoryData?.out_of_stock_items?.map((item: any) => (
+                  <span
+                    key={item.id}
+                    className="px-2.5 py-1 text-xs font-semibold bg-rose-100 text-rose-900 border border-rose-200 rounded-lg flex items-center gap-1.5"
+                  >
+                    <span>🔴 {item.name}: 0 {item.unit}</span>
+                    <span className="text-[10px] text-rose-700 font-normal">(Reorder: {item.reorder_level} {item.unit})</span>
+                  </span>
+                ))}
+                {inventoryData?.low_stock_items?.map((item: any) => (
+                  <span
+                    key={item.id}
+                    className="px-2.5 py-1 text-xs font-semibold bg-amber-100 text-amber-900 border border-amber-200 rounded-lg flex items-center gap-1.5"
+                  >
+                    <span>⚠️ {item.name}: {item.quantity} {item.unit}</span>
+                    <span className="text-[10px] text-amber-700 font-normal">(Min: {item.minimum_stock})</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Consumption by Menu Item Table */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">🥫 Ingredient Consumption by Menu Item</h2>
+                  <p className="text-[11px] text-slate-400">Total recipe ingredients used per dish in this period</p>
+                </div>
+              </div>
+
+              {!inventoryData?.consumption_by_menu_item?.length ? (
+                <p className="text-xs text-slate-400 italic py-8 text-center">No consumption recorded in this period.</p>
+              ) : (
+                <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto pr-1">
+                  {inventoryData.consumption_by_menu_item.map((entry: any, idx: number) => (
+                    <div key={idx} className="py-3 text-xs space-y-1.5">
+                      <div className="flex justify-between items-baseline">
+                        <span className="font-bold text-slate-900">{entry.menu_item_name}</span>
+                        <span className="font-semibold text-emerald-700">₹{entry.estimated_ingredient_cost}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>{entry.orders_sold} orders sold</span>
+                        <div className="flex flex-wrap gap-1 justify-end max-w-xs">
+                          {entry.ingredients.map((ing: any, iIdx: number) => (
+                            <span key={iIdx} className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[10px]">
+                              {ing.name}: {ing.quantity} {ing.unit}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Consumption Trends by Date */}
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">📅 Daily Consumption & Purchases Trend</h2>
+                  <p className="text-[11px] text-slate-400">Day by day breakdown of stock activity</p>
+                </div>
+              </div>
+
+              {!inventoryData?.consumption_by_date?.length ? (
+                <p className="text-xs text-slate-400 italic py-8 text-center">No date activity in this period.</p>
+              ) : (
+                <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 text-[10px] uppercase font-semibold">
+                        <th className="py-2">Date</th>
+                        <th className="py-2">Consumed Qty</th>
+                        <th className="py-2">Estimated Cost</th>
+                        <th className="py-2">Wastage</th>
+                        <th className="py-2">Purchases</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {inventoryData.consumption_by_date.map((row: any, idx: number) => (
+                        <tr key={idx} className="hover:bg-slate-50/70">
+                          <td className="py-2.5 font-medium text-slate-900">{row.date}</td>
+                          <td className="py-2.5 text-indigo-700 font-semibold">{row.consumed_qty}</td>
+                          <td className="py-2.5 font-semibold text-slate-800">₹{Math.round(row.consumed_cost)}</td>
+                          <td className="py-2.5 text-rose-600">{row.wastage_qty ? `${row.wastage_qty} units` : "—"}</td>
+                          <td className="py-2.5 text-emerald-700">{row.purchases_qty ? `${row.purchases_qty} units` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Recent Inventory Transactions Ledger */}
+          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">📜 Recent Inventory Transactions</h2>
+                <p className="text-[11px] text-slate-400">Live ledger of order deductions, adjustments, and inward purchases</p>
+              </div>
+              <Link href="/inventory" className="text-xs font-medium text-indigo-600 hover:underline">
+                View Full Inventory Ledger &rarr;
+              </Link>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500 text-[10px] uppercase font-semibold">
+                    <th className="py-2">Date</th>
+                    <th className="py-2">Item</th>
+                    <th className="py-2">Type</th>
+                    <th className="py-2">Quantity</th>
+                    <th className="py-2">Reference</th>
+                    <th className="py-2">Cost</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {inventoryData?.recent_transactions?.map((tx: any) => (
+                    <tr key={tx.id} className="hover:bg-slate-50/70">
+                      <td className="py-2 text-slate-500 whitespace-nowrap">
+                        {new Date(tx.date).toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
+                        {new Date(tx.date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </td>
+                      <td className="py-2 font-medium text-slate-900">{tx.item_name}</td>
+                      <td className="py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                            tx.type === "ORDER_DEDUCTION"
+                              ? "bg-purple-50 text-purple-700 border-purple-200"
+                              : tx.type === "PURCHASE"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : tx.type === "WASTAGE"
+                              ? "bg-rose-50 text-rose-700 border-rose-200"
+                              : tx.type === "REVERSAL"
+                              ? "bg-blue-50 text-blue-700 border-blue-200"
+                              : "bg-slate-100 text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          {tx.type}
+                        </span>
+                      </td>
+                      <td className="py-2 font-bold text-slate-800">
+                        {tx.type === "ORDER_DEDUCTION" || tx.type === "WASTAGE" ? "-" : "+"}
+                        {tx.quantity} {tx.unit}
+                      </td>
+                      <td className="py-2 text-slate-600">
+                        {tx.order_number ? `#${tx.order_number}` : tx.reason || "—"}
+                      </td>
+                      <td className="py-2 font-medium text-slate-800">
+                        {tx.total_cost ? `₹${tx.total_cost.toFixed(2)}` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )}
+
+  <OrderDrawer
+    orderId={selectedOrderId}
+    onClose={() => setSelectedOrderId(null)}
+    onStatusUpdate={async () => {
+      fetchAnalytics()
+      if (dashboardTab === "inventory") fetchInventoryAnalytics()
+    }}
+  />
     </div>
   )
 }

@@ -75,21 +75,29 @@ export async function completePosOrder(orderId: string, paymentMethod?: "CASH" |
     if (!session?.user) return { error: "Unauthorized" }
 
     const posPaymentMethod = paymentMethod === "ONLINE" ? PaymentMethod.ONLINE : PaymentMethod.CASH
+    const { deductInventoryForOrder } = await import("@/lib/inventory/service")
 
-    await prisma.order.update({
-      where: { id: orderId, restaurant_id: session.user.restaurant_id },
-      data: {
-        status: OrderStatus.DELIVERED,
-        payment_method: posPaymentMethod,
-        payment_status: PaymentStatus.PAID,
-        assigned_employee_id: session.user.id,
-        history: {
-          create: {
-            to_status: OrderStatus.DELIVERED,
-            reason: "POS order completed at counter",
+    await prisma.$transaction(async (tx) => {
+      // Deduct inventory ingredients when POS order is completed/finalized
+      await deductInventoryForOrder(tx, orderId, session.user.id)
+
+      await tx.order.update({
+        where: { id: orderId, restaurant_id: session.user.restaurant_id },
+        data: {
+          status: OrderStatus.DELIVERED,
+          payment_method: posPaymentMethod,
+          payment_status: PaymentStatus.PAID,
+          assigned_employee_id: session.user.id,
+          delivered_at: new Date(),
+          history: {
+            create: {
+              to_status: OrderStatus.DELIVERED,
+              reason: "POS order completed at counter",
+              changed_by: session.user.id,
+            },
           },
         },
-      },
+      })
     })
     
     revalidatePath("/orders")
@@ -98,7 +106,7 @@ export async function completePosOrder(orderId: string, paymentMethod?: "CASH" |
     return { success: true }
   } catch (error) {
     console.error("Complete POS Order Error:", error)
-    return { error: "Failed to complete POS order" }
+    return { error: error instanceof Error ? error.message : "Failed to complete POS order" }
   }
 }
 

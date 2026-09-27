@@ -92,7 +92,23 @@ export async function PATCH(
         }
       }
 
+      // Inventory Deduction & Reversal Logic:
+      const { deductInventoryForOrder, reverseInventoryForOrder } = await import("@/lib/inventory/service")
+
+      // WHATSAPP: Deduct inventory when accepted by staff (NEW -> IN_PROCESS)
+      if (status === "IN_PROCESS" && order.status === "NEW" && order.source === "WHATSAPP") {
+        await deductInventoryForOrder(tx, order.id, session.user.id)
+      }
+
+      // POS: Deduct inventory if completed/finalized via status transition (IN_PROCESS -> DELIVERED)
+      if (status === "DELIVERED" && order.source === "POS") {
+        await deductInventoryForOrder(tx, order.id, session.user.id)
+      }
+
       if (status === "CANCELLED" || status === "REJECTED") {
+        // Reverse deducted inventory if this order had inventory deducted (idempotent)
+        await reverseInventoryForOrder(tx, order.id, reason, session.user.id)
+
         // Refund redeemed points
         if (updated.points_redeemed > 0) {
           try {

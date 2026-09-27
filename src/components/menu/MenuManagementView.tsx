@@ -24,6 +24,13 @@ interface MenuItem {
   category: { id: string; name: string; is_active: boolean }
   variants: Array<{ id: string; name: string; price: number; is_available: boolean }>
   addons: Array<{ id: string; name: string; price: number; is_available: boolean }>
+  ingredients?: Array<{
+    id?: string
+    inventory_item_id: string
+    quantity: number
+    unit: string
+    inventoryItem?: { id: string; name: string; unit: string }
+  }>
 }
 
 interface Category {
@@ -569,9 +576,16 @@ export default function MenuManagementView() {
                           {item.description && (
                             <p className="text-xs text-gray-500 line-clamp-1 mt-0.5">{item.description}</p>
                           )}
-                          {item.prep_time_minutes && (
-                            <span className="text-[10px] text-gray-400">⏱️ {item.prep_time_minutes} mins prep</span>
-                          )}
+                          <div className="flex items-center gap-2 mt-0.5">
+                            {item.prep_time_minutes && (
+                              <span className="text-[10px] text-gray-400">⏱️ {item.prep_time_minutes} mins prep</span>
+                            )}
+                            {item.ingredients && item.ingredients.length > 0 && (
+                              <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-medium">
+                                🥫 {item.ingredients.length} ingredient{item.ingredients.length > 1 ? "s" : ""}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </td>

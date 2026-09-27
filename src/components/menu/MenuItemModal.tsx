@@ -14,6 +14,20 @@ interface AddonInput {
   is_available: boolean
 }
 
+export interface IngredientInput {
+  inventory_item_id: string
+  quantity: string
+  unit: string
+}
+
+interface InventoryItemOption {
+  id: string
+  name: string
+  unit: string
+  quantity: number
+  cost_per_unit: number | null
+}
+
 interface EditableMenuItem {
   id: string
   category_id: string
@@ -30,6 +44,12 @@ interface EditableMenuItem {
   is_bestseller: boolean
   variants: Array<{ name: string; price: number; is_available: boolean }>
   addons: Array<{ name: string; price: number; is_available: boolean }>
+  ingredients?: Array<{
+    inventory_item_id: string
+    quantity: number
+    unit: string
+    inventoryItem?: { id: string; name: string; unit: string }
+  }>
 }
 
 interface MenuItemModalProps {
@@ -70,8 +90,28 @@ export default function MenuItemModal({
     itemToEdit?.addons?.map((a) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || []
   )
 
+  const [ingredients, setIngredients] = useState<IngredientInput[]>([])
+  const [availableInventory, setAvailableInventory] = useState<InventoryItemOption[]>([])
+  const [loadingInventory, setLoadingInventory] = useState(false)
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Fetch available inventory items when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setLoadingInventory(true)
+      fetch("/api/inventory/items")
+        .then((res) => res.json())
+        .then((data) => {
+          if (Array.isArray(data)) {
+            setAvailableInventory(data)
+          }
+        })
+        .catch((err) => console.error("Error fetching inventory items:", err))
+        .finally(() => setLoadingInventory(false))
+    }
+  }, [isOpen])
 
   // Sync state when itemToEdit changes
   useEffect(() => {
@@ -91,6 +131,34 @@ export default function MenuItemModal({
       setVariants(itemToEdit?.variants?.map((v) => ({ name: v.name, price: String(v.price), is_available: v.is_available })) || [])
       setAddons(itemToEdit?.addons?.map((a) => ({ name: a.name, price: String(a.price), is_available: a.is_available })) || [])
       setError(null)
+
+      if (itemToEdit?.ingredients && itemToEdit.ingredients.length > 0) {
+        setIngredients(
+          itemToEdit.ingredients.map((ing) => ({
+            inventory_item_id: ing.inventory_item_id,
+            quantity: String(ing.quantity),
+            unit: ing.unit,
+          }))
+        )
+      } else if (itemToEdit?.id) {
+        // Fetch full details if not loaded with list
+        fetch(`/api/menu/items/${itemToEdit.id}`)
+          .then((res) => res.json())
+          .then((itemData) => {
+            if (itemData?.ingredients && Array.isArray(itemData.ingredients)) {
+              setIngredients(
+                itemData.ingredients.map((ing: any) => ({
+                  inventory_item_id: ing.inventory_item_id,
+                  quantity: String(ing.quantity),
+                  unit: ing.unit,
+                }))
+              )
+            }
+          })
+          .catch(console.error)
+      } else {
+        setIngredients([])
+      }
     }
   }, [itemToEdit, isOpen, categories])
 
@@ -112,12 +180,61 @@ export default function MenuItemModal({
     setAddons(addons.filter((_, i) => i !== index))
   }
 
+  function addIngredientRow() {
+    const firstItem = availableInventory[0]
+    setIngredients([
+      ...ingredients,
+      {
+        inventory_item_id: firstItem ? firstItem.id : "",
+        quantity: "",
+        unit: firstItem ? firstItem.unit : "g",
+      },
+    ])
+  }
+
+  function updateIngredientRow(index: number, field: keyof IngredientInput, value: string) {
+    const next = [...ingredients]
+    next[index] = { ...next[index], [field]: value }
+
+    // If changing inventory item, auto-select its native unit if unit is currently empty or matches old unit
+    if (field === "inventory_item_id") {
+      const selected = availableInventory.find((item) => item.id === value)
+      if (selected) {
+        next[index].unit = selected.unit
+      }
+    }
+
+    setIngredients(next)
+  }
+
+  function removeIngredientRow(index: number) {
+    setIngredients(ingredients.filter((_, i) => i !== index))
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError(null)
 
     try {
+      // Validate ingredients
+      const validIngredients = ingredients
+        .filter((ing) => ing.inventory_item_id.trim())
+        .map((ing) => {
+          const qty = parseFloat(ing.quantity)
+          if (isNaN(qty) || qty <= 0) {
+            throw new Error("Each ingredient must have a quantity greater than 0.")
+          }
+          if (!ing.unit.trim()) {
+            throw new Error("Each ingredient must have a specified unit.")
+          }
+          return {
+            inventory_item_id: ing.inventory_item_id,
+            quantity: qty,
+            unit: ing.unit.trim(),
+          }
+        })
+
       const payload = {
         category_id: categoryId,
         name,
@@ -133,6 +250,7 @@ export default function MenuItemModal({
         is_bestseller: isBestseller,
         variants: variants.filter((v) => v.name.trim() && v.price),
         addons: addons.filter((a) => a.name.trim() && a.price),
+        ingredients: validIngredients,
       }
 
       const url = itemToEdit ? `/api/menu/items/${itemToEdit.id}` : "/api/menu/items"
@@ -160,15 +278,27 @@ export default function MenuItemModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
       <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 space-y-4 my-8 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
-          <h2 className="text-lg font-bold text-gray-900">
-            {itemToEdit ? "Edit Menu Item" : "Add New Menu Item"}
-          </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">
+              {itemToEdit ? "Edit Menu Item" : "Add New Menu Item"}
+            </h2>
+            <p className="text-xs text-gray-500">
+              {itemToEdit
+                ? "Update menu item details, recipe ingredients, and pricing"
+                : "Creates item, syncs with Meta Commerce Catalog, and links inventory"}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold p-1">
             ✕
           </button>
         </div>
 
-        {error && <div className="p-3 bg-red-50 text-red-700 text-sm rounded-md">{error}</div>}
+        {error && (
+          <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-lg flex items-start space-x-2">
+            <span className="text-base leading-none">⚠️</span>
+            <div className="flex-1 font-medium leading-relaxed">{error}</div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -202,6 +332,17 @@ export default function MenuItemModal({
             </div>
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Description</label>
+            <textarea
+              rows={2}
+              placeholder="e.g. Fragrant basmati rice layered with spiced marinated chicken and herbs..."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Price (₹) *</label>
@@ -209,7 +350,7 @@ export default function MenuItemModal({
                 type="number"
                 step="0.01"
                 required
-                placeholder="220"
+                placeholder="250"
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
@@ -217,7 +358,7 @@ export default function MenuItemModal({
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Prep Time (mins)</label>
+              <label className="block text-sm font-medium text-gray-700">Prep Time (Mins)</label>
               <input
                 type="number"
                 placeholder="15"
@@ -229,72 +370,72 @@ export default function MenuItemModal({
 
             <div>
               <label className="block text-sm font-medium text-gray-700">Dietary Type</label>
-              <select
-                value={isVeg ? "veg" : "non-veg"}
-                onChange={(e) => setIsVeg(e.target.value === "veg")}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-              >
-                <option value="veg">🟢 Veg</option>
-                <option value="non-veg">🔴 Non-Veg</option>
-              </select>
+              <div className="mt-2 flex items-center space-x-4 text-sm">
+                <label className="inline-flex items-center">
+                  <input
+                    type="radio"
+                    checked={isVeg}
+                    onChange={() => setIsVeg(true)}
+                    className="text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="ml-1.5 text-emerald-700 font-medium">🌱 Veg</span>
+                </label>
+                <label className="inline-flex items-center">
+                  <input
+                    type="radio"
+                    checked={!isVeg}
+                    onChange={() => setIsVeg(false)}
+                    className="text-rose-600 focus:ring-rose-500"
+                  />
+                  <span className="ml-1.5 text-rose-700 font-medium">🍗 Non-Veg</span>
+                </label>
+              </div>
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Image URL (Optional)</label>
+            <label className="block text-sm font-medium text-gray-700">Image URL</label>
             <input
               type="url"
-              placeholder="https://images.unsplash.com/..."
+              placeholder="https://images.unsplash.com/photo-..."
               value={imageUrl}
               onChange={(e) => setImageUrl(e.target.value)}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Description</label>
-            <textarea
-              placeholder="Detailed description of ingredients, spices, portion size..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-            />
-          </div>
-
-          {/* Status & Attributes Switches */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-3 bg-gray-50 rounded-lg border">
-            <label className="flex items-center space-x-2 text-xs font-medium text-gray-700 cursor-pointer">
+          <div className="flex flex-wrap gap-4 pt-1">
+            <label className="inline-flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isAvailable}
                 onChange={(e) => setIsAvailable(e.target.checked)}
                 className="h-4 w-4 rounded border-gray-300 text-indigo-600"
               />
-              <span>In Stock</span>
+              <span>In Stock / Available</span>
             </label>
 
-            <label className="flex items-center space-x-2 text-xs font-medium text-gray-700 cursor-pointer">
+            <label className="inline-flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isActive}
                 onChange={(e) => setIsActive(e.target.checked)}
                 className="h-4 w-4 rounded border-gray-300 text-indigo-600"
               />
-              <span>Active Item</span>
+              <span>Active on Menu</span>
             </label>
 
-            <label className="flex items-center space-x-2 text-xs font-medium text-gray-700 cursor-pointer">
+            <label className="inline-flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isTodaySpecial}
                 onChange={(e) => setIsTodaySpecial(e.target.checked)}
                 className="h-4 w-4 rounded border-gray-300 text-indigo-600"
               />
-              <span>⭐ Special</span>
+              <span>⭐ Today's Special</span>
             </label>
 
-            <label className="flex items-center space-x-2 text-xs font-medium text-gray-700 cursor-pointer">
+            <label className="inline-flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isBestseller}
@@ -319,111 +460,109 @@ export default function MenuItemModal({
             </div>
           )}
 
-          {/* FUTURE FEATURES
-          <div className="border-t pt-4">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-semibold text-gray-900">Item Variants (Optional)</span>
+          {/* ─────────────────────────────────────────────────────────────
+              INGREDIENTS & RECIPE (INVENTORY INTEGRATION)
+              ───────────────────────────────────────────────────────────── */}
+          <div className="border-t border-slate-200 pt-4 space-y-3">
+            <div className="flex justify-between items-center">
+              <div>
+                <span className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+                  <span>🥫</span>
+                  <span>Recipe Ingredients (Inventory Deduction)</span>
+                </span>
+                <p className="text-[11px] text-gray-500">
+                  Deducted automatically when WhatsApp orders are accepted or POS orders are completed.
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={addVariantRow}
-                className="text-xs text-indigo-600 font-semibold hover:underline"
+                onClick={addIngredientRow}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md transition-colors"
               >
-                + Add Variant (e.g., Half/Full)
+                <span>+</span> Add Ingredient
               </button>
             </div>
-            {variants.length === 0 ? (
-              <p className="text-xs text-gray-500 italic">No variants added (Standard single price item).</p>
-            ) : (
-              <div className="space-y-2">
-                {variants.map((v, idx) => (
-                  <div key={idx} className="flex items-center space-x-2">
-                    <input
-                      type="text"
-                      placeholder="Variant Name (e.g. Half)"
-                      value={v.name}
-                      onChange={(e) => {
-                        const next = [...variants]
-                        next[idx].name = e.target.value
-                        setVariants(next)
-                      }}
-                      className="flex-1 rounded-md border px-2 py-1 text-xs"
-                    />
-                    <input
-                      type="number"
-                      placeholder="Price ₹"
-                      value={v.price}
-                      onChange={(e) => {
-                        const next = [...variants]
-                        next[idx].price = e.target.value
-                        setVariants(next)
-                      }}
-                      className="w-24 rounded-md border px-2 py-1 text-xs"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeVariantRow(idx)}
-                      className="text-red-500 hover:text-red-700 text-xs font-bold px-1"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
 
-          <div className="border-t pt-4">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-semibold text-gray-900">Add-ons / Modifiers (Optional)</span>
-              <button
-                type="button"
-                onClick={addAddonRow}
-                className="text-xs text-indigo-600 font-semibold hover:underline"
-              >
-                + Add Add-on (e.g., Extra Cheese)
-              </button>
-            </div>
-            {addons.length === 0 ? (
-              <p className="text-xs text-gray-500 italic">No add-ons added.</p>
+            {ingredients.length === 0 ? (
+              <div className="p-3 bg-slate-50 border border-dashed border-slate-200 rounded-lg text-center">
+                <p className="text-xs text-slate-500">
+                  No ingredients configured for this item.
+                </p>
+                <button
+                  type="button"
+                  onClick={addIngredientRow}
+                  className="mt-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                >
+                  + Link inventory item (e.g. Rice, Chicken, Oil)
+                </button>
+              </div>
             ) : (
-              <div className="space-y-2">
-                {addons.map((a, idx) => (
-                  <div key={idx} className="flex items-center space-x-2">
-                    <input
-                      type="text"
-                      placeholder="Add-on Name (e.g. Extra Cheese)"
-                      value={a.name}
-                      onChange={(e) => {
-                        const next = [...addons]
-                        next[idx].name = e.target.value
-                        setAddons(next)
-                      }}
-                      className="flex-1 rounded-md border px-2 py-1 text-xs"
-                    />
-                    <input
-                      type="number"
-                      placeholder="Price ₹"
-                      value={a.price}
-                      onChange={(e) => {
-                        const next = [...addons]
-                        next[idx].price = e.target.value
-                        setAddons(next)
-                      }}
-                      className="w-24 rounded-md border px-2 py-1 text-xs"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeAddonRow(idx)}
-                      className="text-red-500 hover:text-red-700 text-xs font-bold px-1"
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {ingredients.map((ing, idx) => {
+                  const selectedItem = availableInventory.find((item) => item.id === ing.inventory_item_id)
+
+                  return (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                      {/* Searchable / Select Inventory Item */}
+                      <div className="flex-1">
+                        <select
+                          required
+                          value={ing.inventory_item_id}
+                          onChange={(e) => updateIngredientRow(idx, "inventory_item_id", e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">Select Inventory Item...</option>
+                          {availableInventory.map((inv) => (
+                            <option key={inv.id} value={inv.id}>
+                              {inv.name} (Stock: {inv.quantity} {inv.unit})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Quantity Required */}
+                      <div className="w-24">
+                        <input
+                          type="number"
+                          step="0.001"
+                          required
+                          placeholder="Qty (e.g. 250)"
+                          value={ing.quantity}
+                          onChange={(e) => updateIngredientRow(idx, "quantity", e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* Unit */}
+                      <div className="w-24">
+                        <input
+                          type="text"
+                          required
+                          placeholder="Unit (g, ml...)"
+                          value={ing.unit}
+                          onChange={(e) => updateIngredientRow(idx, "unit", e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      {/* Remove Button */}
+                      <button
+                        type="button"
+                        onClick={() => removeIngredientRow(idx)}
+                        className="text-slate-400 hover:text-rose-600 font-bold px-1.5 py-1 rounded transition-colors"
+                        title="Remove Ingredient"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
-          */}
 
           <div className="flex justify-end space-x-3 pt-4 border-t sticky bottom-0 bg-white">
             <button
@@ -436,9 +575,16 @@ export default function MenuItemModal({
             <button
               type="submit"
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-50"
+              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-50 flex items-center gap-2"
             >
-              {loading ? "Saving..." : itemToEdit ? "Update Menu Item" : "Create Menu Item"}
+              {loading ? (
+                <>
+                  <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                  <span>{itemToEdit ? "Saving Changes..." : "Syncing to Meta & Saving..."}</span>
+                </>
+              ) : (
+                <span>{itemToEdit ? "Update Menu Item" : "Create Menu Item"}</span>
+              )}
             </button>
           </div>
         </form>

@@ -1031,3 +1031,189 @@ export async function syncMenuItemWithVariants(
 
   return { success: baseResult.success, variantResults }
 }
+
+export interface NewMenuItemSyncInput {
+  id: string
+  restaurant_id: string
+  category_id: string
+  name: string
+  description?: string | null
+  price: number
+  image_url?: string | null
+  is_available?: boolean
+  is_active?: boolean
+}
+
+/**
+ * Pre-syncs and verifies a new MenuItem to Meta Catalog BEFORE saving to the DB.
+ * - HTTP 200 alone is NOT success: polls batch handle / verifies existence in catalog.
+ * - Ingredient details are NOT sent as Meta product fields.
+ * - Returns { success: true, metaProductSku } ONLY after Meta verification succeeds.
+ */
+export async function syncNewMenuItemBeforeSave(
+  itemData: NewMenuItemSyncInput
+): Promise<{ success: boolean; metaProductSku?: string; error?: string }> {
+  try {
+    const restaurant = await prisma.restaurant.findUnique({
+      where: { id: itemData.restaurant_id },
+    })
+    const category = await prisma.menuCategory.findUnique({
+      where: { id: itemData.category_id },
+    })
+
+    if (!restaurant) {
+      return { success: false, error: "Restaurant not found" }
+    }
+
+    const catalogId =
+      restaurant.whatsapp_catalog_id || process.env.WHATSAPP_CATALOG_ID
+    const token = process.env.WHATSAPP_ACCESS_TOKEN
+
+    const retailerId = itemData.id
+
+    if (!catalogId || !token) {
+      const reason = !catalogId
+        ? "Missing Meta WhatsApp catalog ID"
+        : "Missing Meta access token"
+      console.warn(
+        `[Meta Catalog Pre-Sync] '${itemData.name}' (retailer_id: ${retailerId}) NOT_CONFIGURED: ${reason}`
+      )
+      return { success: false, error: reason }
+    }
+
+    // Step 1: Query Meta to determine CREATE vs UPDATE
+    const existenceCheck = await checkProductExistsInMeta(catalogId, retailerId, itemData.name)
+    const batchMethod: "CREATE" | "UPDATE" = existenceCheck.exists ? "UPDATE" : "CREATE"
+
+    // Image fallback
+    const publicImageUrl =
+      itemData.image_url && itemData.image_url.startsWith("http")
+        ? itemData.image_url
+        : "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop"
+
+    const isAvailable = (itemData.is_available ?? true) && (itemData.is_active ?? true)
+
+    // Product payload - NO ingredient information included
+    const productPayload: any = {
+      name: itemData.name,
+      description: itemData.description || itemData.name,
+      availability: isAvailable ? "in stock" : "out of stock",
+      condition: "new",
+      price: Math.round(itemData.price * 100),
+      currency: "INR",
+      url: `https://wa.me/${restaurant.whatsapp_phone_number_id || ""}`,
+      brand: restaurant.name,
+      image_url: publicImageUrl,
+      category: category?.name || "Food & Beverages",
+      custom_label_0: category?.id || "Uncategorized",
+    }
+
+    const batchRequestPayload = {
+      requests: [
+        {
+          method: batchMethod,
+          retailer_id: retailerId,
+          data: productPayload,
+        },
+      ],
+    }
+
+    console.log(
+      `[Meta Catalog Pre-Sync] ${batchMethod} '${itemData.name}' (retailer_id: ${retailerId}, catalog: ${catalogId})`
+    )
+
+    // Ensure Meta Product Set exists
+    if (category) {
+      const metaProductSetId = await ensureMetaProductSet(
+        catalogId,
+        category.id,
+        category.name,
+        category.meta_product_set_id,
+        token
+      )
+      if (metaProductSetId && metaProductSetId !== category.meta_product_set_id) {
+        await prisma.menuCategory.update({
+          where: { id: category.id },
+          data: { meta_product_set_id: metaProductSetId },
+        })
+      }
+    }
+
+    // Step 2: Send batch request to Meta Graph API
+    const batchUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${catalogId}/batch`
+    const batchRes = await fetch(batchUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(batchRequestPayload),
+    })
+
+    const batchData = await batchRes.json()
+
+    console.log(
+      `[Meta Catalog Pre-Sync Response] ${batchMethod} '${itemData.name}' HTTP: ${batchRes.status} handles: ${JSON.stringify(batchData?.handles)} validation_status: ${JSON.stringify(batchData?.validation_status)}`
+    )
+
+    if (!batchRes.ok) {
+      const errMsg = batchData?.error?.message || `HTTP ${batchRes.status}`
+      console.error(`[Meta Catalog Pre-Sync Failed] HTTP error: ${errMsg}`)
+      return { success: false, error: `Meta API error: ${errMsg}` }
+    }
+
+    // Step 3: Inspect per-item validation errors (HTTP 200 alone is NOT success)
+    const validationStatus: any[] = batchData?.validation_status ?? []
+    for (const vs of validationStatus) {
+      if (vs?.errors && vs.errors.length > 0) {
+        const errMsg = vs.errors
+          .map((e: any) => e?.summary || e?.message || JSON.stringify(e))
+          .join("; ")
+        console.error(`[Meta Catalog Pre-Sync Failed] validation_status error: ${errMsg}`)
+        return { success: false, error: `Meta validation rejected item: ${errMsg}` }
+      }
+    }
+
+    const handles: any[] = batchData?.handles ?? []
+    if (handles.length > 0 && handles[0]?.error) {
+      const batchErr = handles[0].error
+      const errMsg: string =
+        batchErr?.error_user_msg || batchErr?.message || JSON.stringify(batchErr)
+      console.error(`[Meta Catalog Pre-Sync Failed] handles error: ${errMsg}`)
+      return { success: false, error: `Meta batch error: ${errMsg}` }
+    }
+
+    // Step 4: Verify batch completion via handle OR paginated scan
+    const batchHandle = Array.isArray(batchData?.handles) && batchData.handles.length > 0
+      ? batchData.handles[0]
+      : null
+
+    let isVerified = false
+    let verifyError = ""
+
+    if (batchHandle) {
+      const handleCheck = await verifyBatchHandle(catalogId, retailerId, itemData.name, batchHandle)
+      isVerified = handleCheck.success
+      if (!isVerified) verifyError = handleCheck.error || "Batch handle verification failed"
+    } else {
+      await new Promise((r) => setTimeout(r, 2500))
+      const scanCheck = await checkProductExistsInMeta(catalogId, retailerId, itemData.name)
+      isVerified = scanCheck.exists
+      if (!isVerified) verifyError = scanCheck.error || "Product not found in paginated scan fallback"
+    }
+
+    if (!isVerified) {
+      const errMsg = verifyError || `Product '${itemData.name}' failed Meta verification`
+      console.error(`[Meta Catalog Pre-Sync Verification Failed] ${errMsg}`)
+      return { success: false, error: errMsg }
+    }
+
+    console.log(`[Meta Catalog Pre-Sync Succeeded & Verified] '${itemData.name}' (retailer_id: ${retailerId})`)
+    return { success: true, metaProductSku: retailerId }
+  } catch (error: any) {
+    const errMsg = error?.message || "Unknown Meta sync exception"
+    console.error(`[Meta Catalog Pre-Sync Exception] ${errMsg}`)
+    return { success: false, error: errMsg }
+  }
+}
+

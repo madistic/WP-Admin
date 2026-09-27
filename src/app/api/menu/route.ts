@@ -48,6 +48,11 @@ export async function GET() {
         category: true,
         variants: { orderBy: { sort_order: "asc" } },
         addons: { orderBy: { created_at: "asc" } },
+        ingredients: {
+          include: {
+            inventoryItem: true,
+          },
+        },
       },
       orderBy: [{ sort_order: "asc" }, { created_at: "desc" }],
     })

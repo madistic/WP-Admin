@@ -37,31 +37,56 @@ export async function PUT(
 
     if (!existing) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
 
-    const updated = await prisma.menuItem.update({
-      where: { id: itemId },
-      data: {
-        ...(body.category_id !== undefined && { category_id: body.category_id }),
-        ...(body.name !== undefined && { name: body.name.trim() }),
-        ...(body.description !== undefined && { description: body.description?.trim() || null }),
-        ...(body.price !== undefined && { price: parseFloat(body.price) }),
-        ...(body.image_url !== undefined && { image_url: body.image_url?.trim() || null }),
-        ...(body.is_available !== undefined && { is_available: Boolean(body.is_available) }),
-        ...(body.is_active !== undefined && { is_active: Boolean(body.is_active) }),
-        ...(body.is_veg !== undefined && { is_veg: Boolean(body.is_veg) }),
-        ...(body.prep_time_minutes !== undefined && { prep_time_minutes: body.prep_time_minutes ? parseInt(body.prep_time_minutes, 10) : null }),
-        ...(body.is_today_special !== undefined && { is_today_special: Boolean(body.is_today_special) }),
-        ...(body.special_until_date !== undefined && { special_until_date: body.special_until_date ? new Date(body.special_until_date) : null }),
-        ...(body.is_bestseller !== undefined && { is_bestseller: Boolean(body.is_bestseller) }),
-        ...(body.sort_order !== undefined && { sort_order: Number(body.sort_order) }),
-      },
-      include: {
-        category: true,
-        variants: true,
-        addons: true,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const item = await tx.menuItem.update({
+        where: { id: itemId },
+        data: {
+          ...(body.category_id !== undefined && { category_id: body.category_id }),
+          ...(body.name !== undefined && { name: body.name.trim() }),
+          ...(body.description !== undefined && { description: body.description?.trim() || null }),
+          ...(body.price !== undefined && { price: parseFloat(body.price) }),
+          ...(body.image_url !== undefined && { image_url: body.image_url?.trim() || null }),
+          ...(body.is_available !== undefined && { is_available: Boolean(body.is_available) }),
+          ...(body.is_active !== undefined && { is_active: Boolean(body.is_active) }),
+          ...(body.is_veg !== undefined && { is_veg: Boolean(body.is_veg) }),
+          ...(body.prep_time_minutes !== undefined && { prep_time_minutes: body.prep_time_minutes ? parseInt(body.prep_time_minutes, 10) : null }),
+          ...(body.is_today_special !== undefined && { is_today_special: Boolean(body.is_today_special) }),
+          ...(body.special_until_date !== undefined && { special_until_date: body.special_until_date ? new Date(body.special_until_date) : null }),
+          ...(body.is_bestseller !== undefined && { is_bestseller: Boolean(body.is_bestseller) }),
+          ...(body.sort_order !== undefined && { sort_order: Number(body.sort_order) }),
+        },
+      })
+
+      // Safe update of MenuItemIngredient records
+      if (body.ingredients !== undefined && Array.isArray(body.ingredients)) {
+        await tx.menuItemIngredient.deleteMany({
+          where: { menu_item_id: itemId },
+        })
+
+        const validIngredients = []
+        for (const ing of body.ingredients) {
+          const qty = parseFloat(ing.quantity)
+          if (ing.inventory_item_id && !isNaN(qty) && qty > 0 && ing.unit) {
+            validIngredients.push({
+              menu_item_id: itemId,
+              inventory_item_id: ing.inventory_item_id,
+              quantity: new Prisma.Decimal(qty.toFixed(3)),
+              unit: ing.unit.trim(),
+            })
+          }
+        }
+
+        if (validIngredients.length > 0) {
+          await tx.menuItemIngredient.createMany({
+            data: validIngredients,
+          })
+        }
+      }
+
+      return item
     })
 
-    // Sync updated product to Meta Catalog (uses stable retailer_id, verifies after sync)
+    // Sync updated product to Meta Catalog (ingredient info is NOT sent to Meta)
     const syncResult = await syncMenuItemWithVariants(updated.id)
     if (syncResult.success) {
       console.log(`[Meta Catalog Sync] UPDATE succeeded for '${updated.name}' (id: ${updated.id})`)
@@ -69,15 +94,56 @@ export async function PUT(
       console.warn(`[Meta Catalog Sync] UPDATE failed for '${updated.name}' (id: ${updated.id})`)
     }
 
-    // Re-fetch to return current meta_sync_status to the UI
+    // Re-fetch to return current state with ingredients to UI
     const updatedWithSyncStatus = await prisma.menuItem.findUnique({
       where: { id: updated.id },
-      include: { category: true, variants: true, addons: true },
+      include: {
+        category: true,
+        variants: true,
+        addons: true,
+        ingredients: {
+          include: {
+            inventoryItem: true,
+          },
+        },
+      },
     })
 
     return NextResponse.json(updatedWithSyncStatus)
   } catch (error: any) {
     console.error("Update Menu Item Error:", error)
+    return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 })
+  }
+}
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: itemId } = await params
+    const session = await getServerSession(authOptions)
+    if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+    const item = await prisma.menuItem.findFirst({
+      where: { id: itemId, restaurant_id: session.user.restaurant_id },
+      include: {
+        category: true,
+        variants: true,
+        addons: true,
+        ingredients: {
+          include: {
+            inventoryItem: true,
+          },
+        },
+      },
+    })
+
+    if (!item) return NextResponse.json({ error: "Menu item not found" }, { status: 404 })
+
+    return NextResponse.json(item)
+  } catch (error: any) {
+    console.error("Get Menu Item Error:", error)
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
   }
 }

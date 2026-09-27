@@ -44,20 +44,42 @@ interface InventoryTransaction {
   created_at: string
 }
 
-const COMMON_UNITS = [
-  "kg",
-  "g",
-  "mg",
-  "L",
-  "ml",
-  "piece",
-  "pcs",
-  "unit",
-  "portion",
-  "box",
-  "pack",
-  "dozen",
+interface UnitGroup {
+  group: string
+  units: { value: string; label: string; hint?: string }[]
+}
+
+const INVENTORY_UNIT_GROUPS: UnitGroup[] = [
+  {
+    group: "Weight",
+    units: [
+      { value: "kg", label: "Kilogram (kg)", hint: "Rice, Flour, Meat, Vegetables" },
+      { value: "g", label: "Gram (g)", hint: "Spices, Salt, Butter, Tea" },
+      { value: "mg", label: "Milligram (mg)", hint: "Saffron, Food Color" },
+    ],
+  },
+  {
+    group: "Volume / Liquid",
+    units: [
+      { value: "L", label: "Litre (L)", hint: "Cooking Oil, Milk, Syrups" },
+      { value: "ml", label: "Millilitre (ml)", hint: "Essences, Sauces, Cream" },
+    ],
+  },
+  {
+    group: "Count & Packaging",
+    units: [
+      { value: "piece", label: "Piece (pc)", hint: "Eggs, Buns, Patties, Lemons" },
+      { value: "packet", label: "Packet (pkt)", hint: "Bread, Seasoning packets" },
+      { value: "box", label: "Box", hint: "Pastry boxes, Pre-mixes" },
+      { value: "bottle", label: "Bottle", hint: "Sauces, Soft drinks, Syrups" },
+      { value: "dozen", label: "Dozen (12 pcs)", hint: "Eggs, Bananas" },
+      { value: "can", label: "Can / Tin", hint: "Condensed milk, Tomatoes" },
+      { value: "portion", label: "Portion", hint: "Portioned dough, Patties" },
+    ],
+  },
 ]
+
+const ALL_STANDARD_UNITS = INVENTORY_UNIT_GROUPS.flatMap((g) => g.units.map((u) => u.value))
 
 export default function InventoryPage() {
   const [activeTab, setActiveTab] = useState<"items" | "ledger">("items")
@@ -85,6 +107,8 @@ export default function InventoryPage() {
   const [itemCostPerUnit, setItemCostPerUnit] = useState("")
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+
+  const displayUnit = itemUnit === "custom" ? (customUnit.trim() || "unit") : itemUnit
 
   // Transaction form state
   const [txType, setTxType] = useState<"PURCHASE" | "ADJUSTMENT" | "WASTAGE">("PURCHASE")
@@ -159,7 +183,7 @@ export default function InventoryPage() {
   const openEditItemModal = (item: InventoryItem) => {
     setItemToEdit(item)
     setItemName(item.name)
-    if (COMMON_UNITS.includes(item.unit)) {
+    if (ALL_STANDARD_UNITS.includes(item.unit)) {
       setItemUnit(item.unit)
       setCustomUnit("")
     } else {
@@ -734,93 +758,168 @@ export default function InventoryPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Measurement Unit *</label>
-                  <select
-                    value={itemUnit}
-                    onChange={(e) => setItemUnit(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 bg-white"
-                  >
-                    {COMMON_UNITS.map((u) => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
-                    ))}
-                    <option value="custom">Custom Unit...</option>
-                  </select>
-                </div>
-
-                {itemUnit === "custom" && (
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Custom Unit Name *</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. bunch, can, bottle"
-                      value={customUnit}
-                      onChange={(e) => setCustomUnit(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                )}
-
-                {!itemToEdit && (
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">Opening Stock</label>
-                    <input
-                      type="number"
-                      step="0.001"
-                      placeholder="0"
-                      value={itemOpeningStock}
-                      onChange={(e) => setItemOpeningStock(e.target.value)}
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Minimum Stock Alert</label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    placeholder="e.g. 5"
-                    value={itemMinStock}
-                    onChange={(e) => setItemMinStock(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
-                  />
-                  <p className="text-[10px] text-gray-400 mt-0.5">Triggers low stock warning</p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">Reorder Level</label>
-                  <input
-                    type="number"
-                    step="0.001"
-                    placeholder="e.g. 10"
-                    value={itemReorderLevel}
-                    onChange={(e) => setItemReorderLevel(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
-                  />
-                  <p className="text-[10px] text-gray-400 mt-0.5">Target level to purchase</p>
-                </div>
-              </div>
-
+              {/* Measurement Unit Selection */}
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Cost Per Unit (₹, Optional)
+                  Measurement Unit *
                 </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="e.g. 65.50"
-                  value={itemCostPerUnit}
-                  onChange={(e) => setItemCostPerUnit(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
-                />
-                <p className="text-[10px] text-gray-400 mt-0.5">Used for calculating total inventory valuation and ingredient costs.</p>
+                <select
+                  value={itemUnit}
+                  onChange={(e) => setItemUnit(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 bg-white font-medium text-slate-800"
+                >
+                  {INVENTORY_UNIT_GROUPS.map((group) => (
+                    <optgroup key={group.group} label={group.group}>
+                      {group.units.map((u) => (
+                        <option key={u.value} value={u.value}>
+                          {u.label} {u.hint ? `(${u.hint})` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  <optgroup label="Custom / Other">
+                    <option value="custom">Custom Unit (e.g. bundle, tray, crate, jar)...</option>
+                  </optgroup>
+                </select>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Base unit for storing stock in inventory. Recipe ingredients can use smaller sub-units (e.g. Stock in kg, recipe uses 250 g).
+                </p>
+              </div>
+
+              {itemUnit === "custom" && (
+                <div className="bg-indigo-50/50 p-3 rounded-lg border border-indigo-100">
+                  <label className="block text-xs font-semibold text-indigo-900 mb-1">
+                    Custom Unit Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. bundle, tray, crate, jar, cup"
+                    value={customUnit}
+                    onChange={(e) => setCustomUnit(e.target.value)}
+                    className="w-full rounded-lg border border-indigo-200 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 bg-white"
+                  />
+                  <p className="text-[10px] text-indigo-600 mt-1">
+                    Enter the unit name used for tracking and recipe portions.
+                  </p>
+                </div>
+              )}
+
+              {/* Opening Stock (Only for new items) */}
+              {!itemToEdit && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Opening Stock ({displayUnit})
+                    </label>
+                    <span className="text-[10px] font-mono font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+                      In {displayUnit}
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder={
+                      displayUnit === "kg"
+                        ? "e.g. 2.5 (or 25)"
+                        : displayUnit === "L"
+                        ? "e.g. 0.750 (or 5)"
+                        : displayUnit === "g"
+                        ? "e.g. 250 (or 500)"
+                        : "e.g. 10"
+                    }
+                    value={itemOpeningStock}
+                    onChange={(e) => setItemOpeningStock(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Initial physical stock on hand in <span className="font-semibold text-gray-700">{displayUnit}</span> when adding this item. Supports decimals (e.g. 2.5 kg, 0.750 L, 250 g). Automatically recorded as an OPENING transaction.
+                  </p>
+                </div>
+              )}
+
+              {/* Minimum Stock & Reorder Level */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Minimum Stock Alert ({displayUnit})
+                    </label>
+                  </div>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder="e.g. 1.0 or 5"
+                    value={itemMinStock}
+                    onChange={(e) => setItemMinStock(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Low-stock warning triggers when inventory drops to or below this level in <span className="font-semibold text-gray-700">{displayUnit}</span>.
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Reorder Level ({displayUnit})
+                    </label>
+                  </div>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder="e.g. 5.0 or 10"
+                    value={itemReorderLevel}
+                    onChange={(e) => setItemReorderLevel(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Recommended replenishment threshold / target restock level in <span className="font-semibold text-gray-700">{displayUnit}</span>.
+                  </p>
+                </div>
+              </div>
+
+              {/* Cost Per Unit */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-700">
+                    Cost Per Unit (₹ per {displayUnit})
+                  </label>
+                  <span className="text-[10px] text-gray-400 font-normal">Optional</span>
+                </div>
+                <div className="relative rounded-lg shadow-2xs">
+                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                    <span className="text-gray-500 text-xs font-medium">₹</span>
+                  </div>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder={
+                      displayUnit === "kg"
+                        ? "60.00 (e.g. ₹60 / kg)"
+                        : displayUnit === "L"
+                        ? "140.00 (e.g. ₹140 / L)"
+                        : displayUnit === "piece"
+                        ? "8.00 (e.g. ₹8 / piece)"
+                        : displayUnit === "g"
+                        ? "0.50 (e.g. ₹0.50 / g)"
+                        : `e.g. 50.00 per ${displayUnit}`
+                    }
+                    value={itemCostPerUnit}
+                    onChange={(e) => setItemCostPerUnit(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 pl-7 pr-16 py-2 text-xs focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                    <span className="text-gray-400 text-[11px] font-medium">/ {displayUnit}</span>
+                  </div>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Purchase cost for 1 {displayUnit} (e.g. Rice → ₹60/kg, Oil → ₹140/L, Eggs → ₹8/piece). Used for calculating total inventory valuation and recipe ingredient costing.
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-4 border-t sticky bottom-0 bg-white">

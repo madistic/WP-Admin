@@ -20,7 +20,8 @@ export interface IngredientDeductionPlan {
 export async function deductInventoryForOrder(
   tx: Prisma.TransactionClient,
   orderId: string,
-  userId?: string | null
+  userId?: string | null,
+  prefetchedOrder?: any
 ): Promise<{ success: boolean; deductedCount: number; alreadyDeducted?: boolean; message?: string }> {
   // 1. Idempotency Check: Verify if this order has already had its inventory deducted
   const existingDeduction = await tx.inventoryTransaction.findFirst({
@@ -28,6 +29,7 @@ export async function deductInventoryForOrder(
       order_id: orderId,
       type: "ORDER_DEDUCTION",
     },
+    select: { id: true },
   })
 
   if (existingDeduction) {
@@ -35,17 +37,34 @@ export async function deductInventoryForOrder(
     return { success: true, deductedCount: 0, alreadyDeducted: true, message: "Inventory already deducted for this order." }
   }
 
-  // 2. Fetch Order with its OrderItems and MenuItem ingredients
-  const order = await tx.order.findUnique({
+  // 2. Resolve Order with its OrderItems and MenuItem ingredients
+  const order = prefetchedOrder || await tx.order.findUnique({
     where: { id: orderId },
-    include: {
+    select: {
+      id: true,
+      restaurant_id: true,
+      branch_id: true,
+      order_number: true,
       items: {
-        include: {
+        select: {
+          quantity: true,
           menuItem: {
-            include: {
+            select: {
               ingredients: {
-                include: {
-                  inventoryItem: true,
+                select: {
+                  inventory_item_id: true,
+                  quantity: true,
+                  unit: true,
+                  inventoryItem: {
+                    select: {
+                      id: true,
+                      name: true,
+                      quantity: true,
+                      unit: true,
+                      cost_per_unit: true,
+                      is_active: true,
+                    },
+                  },
                 },
               },
             },
@@ -59,9 +78,16 @@ export async function deductInventoryForOrder(
     throw new Error(`Order ${orderId} not found for inventory deduction.`)
   }
 
-  // 3. Aggregate all required ingredient quantities across all order items
-  // Key: inventory_item_id
-  const deductionMap = new Map<string, IngredientDeductionPlan>()
+  // 3. Aggregate all required ingredient quantities across all order items in memory
+  const deductionMap = new Map<
+    string,
+    {
+      inventoryItemId: string
+      inventoryItemName: string
+      totalDeduction: number
+      unit: string
+    }
+  >()
 
   for (const orderItem of order.items) {
     const ingredients = orderItem.menuItem?.ingredients || []
@@ -83,10 +109,8 @@ export async function deductInventoryForOrder(
         deductionMap.set(invItem.id, {
           inventoryItemId: invItem.id,
           inventoryItemName: invItem.name,
-          currentStock: Number(invItem.quantity),
           totalDeduction: lineDeduction,
           unit: invItem.unit,
-          unitCost: invItem.cost_per_unit ? Number(invItem.cost_per_unit) : null,
         })
       }
     }
@@ -98,14 +122,26 @@ export async function deductInventoryForOrder(
     return { success: true, deductedCount: 0, message: "No ingredients required for this order." }
   }
 
-  // 4. Validate stock availability for EVERY ingredient before modifying any stock
+  // 4. Batch fetch current stock for ALL required inventory items in a SINGLE query
+  const requiredIds = Array.from(deductionMap.keys())
+  const currentDbItems = await tx.inventoryItem.findMany({
+    where: { id: { in: requiredIds } },
+    select: {
+      id: true,
+      name: true,
+      quantity: true,
+      unit: true,
+      cost_per_unit: true,
+    },
+  })
+
+  const currentItemMap = new Map(currentDbItems.map((item) => [item.id, item]))
+
+  // 5. Validate stock availability for EVERY ingredient before modifying any stock
   const insufficientItems: string[] = []
 
   for (const plan of deductionMap.values()) {
-    // Re-verify current stock under transaction lock
-    const currentItem = await tx.inventoryItem.findUnique({
-      where: { id: plan.inventoryItemId },
-    })
+    const currentItem = currentItemMap.get(plan.inventoryItemId)
 
     if (!currentItem) {
       throw new Error(`Inventory item "${plan.inventoryItemName}" (${plan.inventoryItemId}) not found.`)
@@ -125,54 +161,76 @@ export async function deductInventoryForOrder(
     throw new Error(errorMsg)
   }
 
-  // 5. Deduct from inventory items and create immutable transaction records
-  let deductedCount = 0
+  // 6. Perform atomic stock deductions & build ledger records
+  const transactionRows: Array<{
+    restaurant_id: string
+    branch_id: string | null
+    inventory_item_id: string
+    order_id: string
+    type: "ORDER_DEDUCTION"
+    quantity: Prisma.Decimal
+    previous_quantity: Prisma.Decimal
+    new_quantity: Prisma.Decimal
+    unit_cost: Prisma.Decimal | null
+    total_cost: Prisma.Decimal | null
+    reason: string
+    created_by: string | null
+  }> = []
 
   for (const plan of deductionMap.values()) {
-    const currentItem = await tx.inventoryItem.findUnique({
-      where: { id: plan.inventoryItemId },
-    })
-    if (!currentItem) continue
+    const currentItem = currentItemMap.get(plan.inventoryItemId)!
+    const deductionDecimal = new Prisma.Decimal(plan.totalDeduction.toFixed(3))
 
-    const currentQtyNum = Number(currentItem.quantity)
-    const newQtyNum = currentQtyNum - plan.totalDeduction
-    const newQtyDecimal = new Prisma.Decimal(newQtyNum.toFixed(3))
-    const deductionQtyDecimal = new Prisma.Decimal(plan.totalDeduction.toFixed(3))
-
-    // Update inventory quantity
-    await tx.inventoryItem.update({
+    // Atomic decrement in PostgreSQL:
+    // UPDATE "inventory_items" SET "quantity" = "quantity" - $1 WHERE "id" = $2 RETURNING *
+    const updated = await tx.inventoryItem.update({
       where: { id: currentItem.id },
       data: {
-        quantity: newQtyDecimal,
+        quantity: {
+          decrement: deductionDecimal,
+        },
+      },
+      select: {
+        id: true,
+        quantity: true,
       },
     })
 
-    // Record ORDER_DEDUCTION ledger transaction
-    const unitCost = currentItem.cost_per_unit ? Number(currentItem.cost_per_unit) : null
-    const totalCost = unitCost ? new Prisma.Decimal((unitCost * plan.totalDeduction).toFixed(2)) : null
+    // Strict safety check: Never allow negative inventory
+    if (Number(updated.quantity) < 0) {
+      throw new Error(
+        `Insufficient stock for "${currentItem.name}". Remaining stock cannot be negative (would be ${Number(updated.quantity)}).`
+      )
+    }
 
-    await tx.inventoryTransaction.create({
-      data: {
-        restaurant_id: order.restaurant_id,
-        branch_id: order.branch_id,
-        inventory_item_id: currentItem.id,
-        order_id: order.id,
-        type: "ORDER_DEDUCTION",
-        quantity: deductionQtyDecimal,
-        previous_quantity: currentItem.quantity,
-        new_quantity: newQtyDecimal,
-        unit_cost: currentItem.cost_per_unit,
-        total_cost: totalCost,
-        reason: `Order #${order.order_number} deduction`,
-        created_by: userId || null,
-      },
+    const unitCostNum = currentItem.cost_per_unit ? Number(currentItem.cost_per_unit) : null
+    const totalCostDecimal = unitCostNum ? new Prisma.Decimal((unitCostNum * plan.totalDeduction).toFixed(2)) : null
+
+    transactionRows.push({
+      restaurant_id: order.restaurant_id,
+      branch_id: order.branch_id || null,
+      inventory_item_id: currentItem.id,
+      order_id: order.id,
+      type: "ORDER_DEDUCTION",
+      quantity: deductionDecimal,
+      previous_quantity: currentItem.quantity,
+      new_quantity: updated.quantity,
+      unit_cost: currentItem.cost_per_unit,
+      total_cost: totalCostDecimal,
+      reason: `Order #${order.order_number} deduction`,
+      created_by: userId || null,
     })
-
-    deductedCount++
   }
 
-  console.log(`[Inventory Service] Successfully deducted ${deductedCount} ingredient(s) for order #${order.order_number}`)
-  return { success: true, deductedCount }
+  // 7. Bulk insert all ledger transactions in ONE query
+  if (transactionRows.length > 0) {
+    await tx.inventoryTransaction.createMany({
+      data: transactionRows,
+    })
+  }
+
+  console.log(`[Inventory Service] Successfully deducted ${transactionRows.length} ingredient(s) for order #${order.order_number}`)
+  return { success: true, deductedCount: transactionRows.length }
 }
 
 /**
@@ -192,6 +250,7 @@ export async function reverseInventoryForOrder(
       order_id: orderId,
       type: "REVERSAL",
     },
+    select: { id: true },
   })
 
   if (existingReversals) {
@@ -206,8 +265,19 @@ export async function reverseInventoryForOrder(
       type: "ORDER_DEDUCTION",
     },
     include: {
-      inventoryItem: true,
-      order: true,
+      inventoryItem: {
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          cost_per_unit: true,
+        },
+      },
+      order: {
+        select: {
+          order_number: true,
+        },
+      },
     },
   })
 
@@ -217,55 +287,67 @@ export async function reverseInventoryForOrder(
   }
 
   const orderNumber = deductions[0]?.order?.order_number || orderId
-  let reversedCount = 0
 
-  // 3. Restore stock and record REVERSAL transactions
+  // 3. Restore stock atomically and build reversal transaction records
+  const reversalRows: Array<{
+    restaurant_id: string
+    branch_id: string | null
+    inventory_item_id: string
+    order_id: string
+    type: "REVERSAL"
+    quantity: Prisma.Decimal
+    previous_quantity: Prisma.Decimal
+    new_quantity: Prisma.Decimal
+    unit_cost: Prisma.Decimal | null
+    total_cost: Prisma.Decimal | null
+    reason: string
+    created_by: string | null
+  }> = []
+
   for (const deduction of deductions) {
-    const currentItem = await tx.inventoryItem.findUnique({
-      where: { id: deduction.inventory_item_id },
-    })
-
-    if (!currentItem) {
+    if (!deduction.inventoryItem) {
       console.warn(`[Inventory Service] Cannot reverse stock: inventory item ${deduction.inventory_item_id} no longer exists.`)
       continue
     }
 
-    const currentQtyNum = Number(currentItem.quantity)
-    const deductionQtyNum = Number(deduction.quantity)
-    const restoredQtyNum = currentQtyNum + deductionQtyNum
-    const newQtyDecimal = new Prisma.Decimal(restoredQtyNum.toFixed(3))
-
-    // Restore item stock
-    await tx.inventoryItem.update({
-      where: { id: currentItem.id },
+    // Atomic increment in PostgreSQL
+    const updated = await tx.inventoryItem.update({
+      where: { id: deduction.inventory_item_id },
       data: {
-        quantity: newQtyDecimal,
+        quantity: {
+          increment: deduction.quantity,
+        },
+      },
+      select: {
+        id: true,
+        quantity: true,
       },
     })
 
-    // Record REVERSAL transaction in ledger
-    await tx.inventoryTransaction.create({
-      data: {
-        restaurant_id: deduction.restaurant_id,
-        branch_id: deduction.branch_id,
-        inventory_item_id: currentItem.id,
-        order_id: orderId,
-        type: "REVERSAL",
-        quantity: deduction.quantity,
-        previous_quantity: currentItem.quantity,
-        new_quantity: newQtyDecimal,
-        unit_cost: currentItem.cost_per_unit,
-        total_cost: deduction.total_cost,
-        reason: reason || `Order #${orderNumber} cancelled/reversed`,
-        created_by: userId || null,
-      },
+    reversalRows.push({
+      restaurant_id: deduction.restaurant_id,
+      branch_id: deduction.branch_id || null,
+      inventory_item_id: deduction.inventory_item_id,
+      order_id: orderId,
+      type: "REVERSAL",
+      quantity: deduction.quantity,
+      previous_quantity: deduction.inventoryItem.quantity,
+      new_quantity: updated.quantity,
+      unit_cost: deduction.inventoryItem.cost_per_unit,
+      total_cost: deduction.total_cost,
+      reason: reason || `Order #${orderNumber} cancelled/reversed`,
+      created_by: userId || null,
     })
-
-    reversedCount++
   }
 
-  console.log(`[Inventory Service] Successfully reversed ${reversedCount} ingredient(s) for order #${orderNumber}`)
-  return { success: true, reversedCount }
+  if (reversalRows.length > 0) {
+    await tx.inventoryTransaction.createMany({
+      data: reversalRows,
+    })
+  }
+
+  console.log(`[Inventory Service] Successfully reversed ${reversalRows.length} ingredient(s) for order #${orderNumber}`)
+  return { success: true, reversedCount: reversalRows.length }
 }
 
 /**

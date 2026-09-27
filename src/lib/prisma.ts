@@ -6,7 +6,7 @@ const prismaClientSingleton = () => {
   const connectionString = process.env.DATABASE_URL
   const isLocal = !connectionString || connectionString.includes('localhost') || connectionString.includes('127.0.0.1')
   const isSslExplicit = connectionString?.includes('sslmode=require') || connectionString?.includes('sslmode=prefer') || connectionString?.includes('ssl=true')
-  const useSsl = isSslExplicit || (process.env.NODE_ENV === 'production' && !isLocal)
+  const useSsl = isSslExplicit || !isLocal
 
   const poolOptions: any = {
     connectionString: connectionString || undefined,

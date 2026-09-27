@@ -8,6 +8,8 @@ import prisma from "@/lib/prisma"
 import { normalizePhoneNumber } from "@/lib/phone"
 import { getDefaultBranchId } from "@/lib/branch-scope"
 
+import { deductInventoryForOrder } from "@/lib/inventory/service"
+
 type PosItem = { menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[]; description?: string }
 
 export async function createTestOrder(payload: { restaurant_id: string; order_type: OrderType; table_number?: string; customer_name?: string; customer_phone?: string; address?: string; payment_method?: "CASH" | "ONLINE"; items: PosItem[]; client_request_id: string }) {
@@ -75,30 +77,60 @@ export async function completePosOrder(orderId: string, paymentMethod?: "CASH" |
     if (!session?.user) return { error: "Unauthorized" }
 
     const posPaymentMethod = paymentMethod === "ONLINE" ? PaymentMethod.ONLINE : PaymentMethod.CASH
-    const { deductInventoryForOrder } = await import("@/lib/inventory/service")
 
-    await prisma.$transaction(async (tx) => {
-      // Deduct inventory ingredients when POS order is completed/finalized
-      await deductInventoryForOrder(tx, orderId, session.user.id)
-
-      await tx.order.update({
-        where: { id: orderId, restaurant_id: session.user.restaurant_id },
-        data: {
-          status: OrderStatus.DELIVERED,
-          payment_method: posPaymentMethod,
-          payment_status: PaymentStatus.PAID,
-          assigned_employee_id: session.user.id,
-          delivered_at: new Date(),
-          history: {
-            create: {
-              to_status: OrderStatus.DELIVERED,
-              reason: "POS order completed at counter",
-              changed_by: session.user.id,
+    // Pre-fetch order outside transaction to keep transaction fast and minimal
+    const order = await prisma.order.findUnique({
+      where: { id: orderId, restaurant_id: session.user.restaurant_id },
+      include: {
+        items: {
+          include: {
+            menuItem: {
+              include: {
+                ingredients: {
+                  include: {
+                    inventoryItem: true,
+                  },
+                },
+              },
             },
           },
         },
-      })
+      },
     })
+
+    if (!order) return { error: "Order not found" }
+    if (order.status === OrderStatus.DELIVERED) {
+      return { success: true }
+    }
+
+    await prisma.$transaction(
+      async (tx) => {
+        // Deduct inventory ingredients when POS order is completed/finalized
+        await deductInventoryForOrder(tx, orderId, session.user.id, order)
+
+        await tx.order.update({
+          where: { id: orderId, restaurant_id: session.user.restaurant_id },
+          data: {
+            status: OrderStatus.DELIVERED,
+            payment_method: posPaymentMethod,
+            payment_status: PaymentStatus.PAID,
+            assigned_employee_id: session.user.id,
+            delivered_at: new Date(),
+            history: {
+              create: {
+                to_status: OrderStatus.DELIVERED,
+                reason: "POS order completed at counter",
+                changed_by: session.user.id,
+              },
+            },
+          },
+        })
+      },
+      {
+        maxWait: 5000,
+        timeout: 10000,
+      }
+    )
     
     revalidatePath("/orders")
     revalidatePath("/history")

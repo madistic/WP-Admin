@@ -4,9 +4,9 @@ import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 
 // Safe Growth calculation: (Current - Prev) / Prev * 100
-// Returns null if prev is 0 (frontend displays N/A, never Infinity or 100%)
+// Strictly returns null if prev is 0 (frontend displays N/A, never Infinity or 100%)
 function calcGrowth(curr: number, prev: number): number | null {
-  if (prev === 0) return null
+  if (prev === 0 || isNaN(prev) || isNaN(curr)) return null
   return parseFloat((((curr - prev) / prev) * 100).toFixed(1))
 }
 
@@ -70,19 +70,28 @@ export async function GET(request: Request) {
     )
     const daysInPeriod = Math.max(1, Math.round(durationMs / (1000 * 60 * 60 * 24)))
 
+    // Boundaries for explicit Today vs Yesterday calculations
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+    const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0)
+    const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999)
+
     // ─────────────────────────────────────────────────────────────
     // 1. CONCURRENT BATCH DATABASE READS (ZERO N+1 QUERIES)
     // ─────────────────────────────────────────────────────────────
     const [
       allOrdersInPeriod,
       prevOrdersInPeriod,
+      todayOrders,
+      yesterdayOrders,
       allHistoricalOrders,
       allMenuItems,
       allInventoryItems,
       allPeriodTransactions,
       prevPeriodTransactions,
+      whatsAppCartsCount,
     ] = await Promise.all([
-      // Current Period Orders (including items and customer)
+      // Current Period Orders
       prisma.order.findMany({
         where: {
           restaurant_id: restaurantId,
@@ -116,7 +125,29 @@ export async function GET(request: Request) {
         },
       }),
 
-      // All Historical Valid Orders for this Restaurant (for Lifetime Value, Cohorts, RFM, Segments)
+      // Today's orders
+      prisma.order.findMany({
+        where: {
+          restaurant_id: restaurantId,
+          ...branchScope,
+          created_at: { gte: todayStart, lte: todayEnd },
+          status: { notIn: ["CANCELLED", "REJECTED"] },
+        },
+        select: { id: true, total: true, subtotal: true },
+      }),
+
+      // Yesterday's orders
+      prisma.order.findMany({
+        where: {
+          restaurant_id: restaurantId,
+          ...branchScope,
+          created_at: { gte: yesterdayStart, lte: yesterdayEnd },
+          status: { notIn: ["CANCELLED", "REJECTED"] },
+        },
+        select: { id: true, total: true, subtotal: true },
+      }),
+
+      // All Historical Valid Orders (for full time-based retention, cohorts, RFM, and preferences)
       prisma.order.findMany({
         where: {
           restaurant_id: restaurantId,
@@ -125,11 +156,23 @@ export async function GET(request: Request) {
         },
         select: {
           id: true,
+          order_number: true,
           customer_id: true,
           customer_name_snapshot: true,
           customer_phone_snapshot: true,
           total: true,
+          subtotal: true,
+          delivery_fee: true,
           created_at: true,
+          source: true,
+          order_type: true,
+          items: {
+            select: {
+              menu_item_id: true,
+              item_name_snapshot: true,
+              quantity: true,
+            },
+          },
         },
         orderBy: { created_at: "asc" },
       }),
@@ -157,7 +200,7 @@ export async function GET(request: Request) {
         },
       }),
 
-      // All Active Inventory Items (current stock and valuations)
+      // All Active Inventory Items (current stock, opening stock, and valuations)
       prisma.inventoryItem.findMany({
         where: {
           restaurant_id: restaurantId,
@@ -198,6 +241,14 @@ export async function GET(request: Request) {
           unit_cost: true,
         },
       }),
+
+      // WhatsApp Carts count (for WhatsApp conversion rate)
+      prisma.whatsAppCart.count({
+        where: {
+          restaurant_id: restaurantId,
+          ...branchScope,
+        },
+      }),
     ])
 
     // Filter valid (non-cancelled, non-rejected) orders
@@ -205,19 +256,101 @@ export async function GET(request: Request) {
     const validPrev = prevOrdersInPeriod.filter((o) => o.status !== "CANCELLED" && o.status !== "REJECTED")
 
     // ─────────────────────────────────────────────────────────────
-    // 2. CORE FINANCIAL & OPERATIONAL KPIS
+    // 2. RECIPE COST & MARGIN LOOKUP TABLE
     // ─────────────────────────────────────────────────────────────
-    const currentRevenue = validCurrent.reduce((acc, o) => acc + o.total, 0)
-    const prevRevenue = validPrev.reduce((acc, o) => acc + o.total, 0)
-    const revenueGrowth = calcGrowth(currentRevenue, prevRevenue)
+    const menuItemLookup = new Map<string, (typeof allMenuItems)[0]>()
+    const recipeCostMap = new Map<string, { cost: number; hasRecipe: boolean }>()
+
+    for (const item of allMenuItems) {
+      menuItemLookup.set(item.id, item)
+      let cost = 0
+      let hasRecipe = false
+      if (item.ingredients && item.ingredients.length > 0) {
+        hasRecipe = true
+        for (const ing of item.ingredients) {
+          const unitCost = ing.inventoryItem?.cost_per_unit ? Number(ing.inventoryItem.cost_per_unit) : 0
+          cost += Number(ing.quantity) * unitCost
+        }
+      }
+      recipeCostMap.set(item.id, { cost, hasRecipe })
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 3. CORE FINANCIAL & OPERATIONAL KPIS
+    // ─────────────────────────────────────────────────────────────
+    const grossSalesCurrent = validCurrent.reduce((acc, o) => acc + o.total, 0)
+    const grossSalesPrev = validPrev.reduce((acc, o) => acc + o.total, 0)
+    const grossSalesGrowth = calcGrowth(grossSalesCurrent, grossSalesPrev)
+
+    const netSalesCurrent = validCurrent.reduce((acc, o) => acc + (o.subtotal || o.total), 0)
+    const netSalesPrev = validPrev.reduce((acc, o) => acc + (o.subtotal || o.total), 0)
+    const netSalesGrowth = calcGrowth(netSalesCurrent, netSalesPrev)
 
     const currentOrderCount = validCurrent.length
     const prevOrderCount = validPrev.length
     const orderCountGrowth = calcGrowth(currentOrderCount, prevOrderCount)
 
-    const currentAOV = currentOrderCount > 0 ? currentRevenue / currentOrderCount : 0
-    const prevAOV = prevOrderCount > 0 ? prevRevenue / prevOrderCount : 0
+    const currentAOV = currentOrderCount > 0 ? grossSalesCurrent / currentOrderCount : 0
+    const prevAOV = prevOrderCount > 0 ? grossSalesPrev / prevOrderCount : 0
     const aovGrowth = calcGrowth(currentAOV, prevAOV)
+
+    // Calculate Gross Profit, Food Cost %, and Contribution Margin from items with recipes
+    let totalCogsCurrent = 0
+    let salesWithRecipeCurrent = 0
+    for (const order of validCurrent) {
+      for (const it of order.items) {
+        const recipe = recipeCostMap.get(it.menu_item_id)
+        if (recipe && recipe.hasRecipe) {
+          totalCogsCurrent += recipe.cost * it.quantity
+          salesWithRecipeCurrent += it.line_total
+        }
+      }
+    }
+
+    let totalCogsPrev = 0
+    let salesWithRecipePrev = 0
+    for (const order of validPrev) {
+      for (const it of order.items) {
+        const recipe = recipeCostMap.get(it.menu_item_id)
+        if (recipe && recipe.hasRecipe) {
+          totalCogsPrev += recipe.cost * it.quantity
+          salesWithRecipePrev += it.line_total
+        }
+      }
+    }
+
+    const hasAnyRecipeData = salesWithRecipeCurrent > 0
+    const currentGrossProfit = hasAnyRecipeData ? Math.round(netSalesCurrent - totalCogsCurrent) : null
+    const prevGrossProfit = salesWithRecipePrev > 0 ? Math.round(netSalesPrev - totalCogsPrev) : null
+    const grossProfitGrowth = currentGrossProfit !== null && prevGrossProfit !== null ? calcGrowth(currentGrossProfit, prevGrossProfit) : null
+
+    const currentContributionMargin = currentGrossProfit !== null && netSalesCurrent > 0
+      ? parseFloat(((currentGrossProfit / netSalesCurrent) * 100).toFixed(1))
+      : null
+
+    const currentFoodCostPercent = hasAnyRecipeData && netSalesCurrent > 0
+      ? parseFloat(((totalCogsCurrent / netSalesCurrent) * 100).toFixed(1))
+      : null
+
+    // WhatsApp Metrics
+    const whatsAppOrdersCurrent = validCurrent.filter((o) => o.source === "WHATSAPP")
+    const whatsAppOrdersPrev = validPrev.filter((o) => o.source === "WHATSAPP")
+    const whatsAppOrdersCount = whatsAppOrdersCurrent.length
+    const whatsAppOrdersGrowth = calcGrowth(whatsAppOrdersCount, whatsAppOrdersPrev.length)
+    const whatsAppConversionRate = whatsAppCartsCount > 0
+      ? parseFloat(((whatsAppOrdersCount / Math.max(whatsAppOrdersCount, whatsAppCartsCount)) * 100).toFixed(1))
+      : null
+
+    // Today vs Yesterday
+    const todaySales = todayOrders.reduce((sum, o) => sum + o.total, 0)
+    const yesterdaySales = yesterdayOrders.reduce((sum, o) => sum + o.total, 0)
+    const todaySalesGrowth = calcGrowth(todaySales, yesterdaySales)
+    const todayOrderCount = todayOrders.length
+    const yesterdayOrderCount = yesterdayOrders.length
+    const todayOrdersGrowth = calcGrowth(todayOrderCount, yesterdayOrderCount)
+    const todayAOV = todayOrderCount > 0 ? Math.round(todaySales / todayOrderCount) : 0
+    const yesterdayAOV = yesterdayOrderCount > 0 ? Math.round(yesterdaySales / yesterdayOrderCount) : 0
+    const todayAovGrowth = calcGrowth(todayAOV, yesterdayAOV)
 
     const cancelledOrdersCount = allOrdersInPeriod.filter((o) => o.status === "CANCELLED").length
     const rejectedOrdersCount = allOrdersInPeriod.filter((o) => o.status === "REJECTED").length
@@ -237,9 +370,9 @@ export async function GET(request: Request) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 3. SECTION 1: CUSTOMER ANALYTICS
+    // 4. SECTION 1: CUSTOMER ANALYTICS & TIME-BASED RETENTION
     // ─────────────────────────────────────────────────────────────
-    // Map all historical valid orders per customer
+    // Build full lifetime customer history map
     const customerHistMap = new Map<
       string,
       {
@@ -248,13 +381,26 @@ export async function GET(request: Request) {
         phone: string
         firstOrder: Date
         lastOrder: Date
-        ordersCount: number
+        orders: Array<{
+          id: string
+          order_number: string
+          total: number
+          created_at: Date
+          items: Array<{ menu_item_id: string; item_name_snapshot: string; quantity: number }>
+        }>
         totalSpend: number
       }
     >()
 
     for (const ord of allHistoricalOrders) {
       const existing = customerHistMap.get(ord.customer_id)
+      const ordSummary = {
+        id: ord.id,
+        order_number: ord.order_number,
+        total: ord.total,
+        created_at: ord.created_at,
+        items: ord.items,
+      }
       if (!existing) {
         customerHistMap.set(ord.customer_id, {
           id: ord.customer_id,
@@ -262,12 +408,12 @@ export async function GET(request: Request) {
           phone: ord.customer_phone_snapshot,
           firstOrder: ord.created_at,
           lastOrder: ord.created_at,
-          ordersCount: 1,
+          orders: [ordSummary],
           totalSpend: ord.total,
         })
       } else {
         existing.lastOrder = ord.created_at
-        existing.ordersCount++
+        existing.orders.push(ordSummary)
         existing.totalSpend += ord.total
       }
     }
@@ -278,6 +424,9 @@ export async function GET(request: Request) {
     let newCustomersCount = 0
     let returningCustomersCount = 0
     let retainedFromPrevCount = 0
+    let reactivatedCustomersCount = 0
+
+    const nowMs = now.getTime()
 
     for (const cId of currentCustomerIds) {
       const hist = customerHistMap.get(cId)
@@ -285,6 +434,19 @@ export async function GET(request: Request) {
         newCustomersCount++
       } else {
         returningCustomersCount++
+        // Check if reactivated: customer ordered in this period, but prior order gap was > 60 days
+        if (hist && hist.orders.length >= 2) {
+          const ordersInPeriod = hist.orders.filter((o) => o.created_at >= startDate && o.created_at <= endDate)
+          const ordersBeforePeriod = hist.orders.filter((o) => o.created_at < startDate)
+          if (ordersInPeriod.length > 0 && ordersBeforePeriod.length > 0) {
+            const firstInPeriod = ordersInPeriod[0].created_at.getTime()
+            const lastBeforePeriod = ordersBeforePeriod[ordersBeforePeriod.length - 1].created_at.getTime()
+            const gapDays = (firstInPeriod - lastBeforePeriod) / (1000 * 60 * 60 * 24)
+            if (gapDays >= 60) {
+              reactivatedCustomersCount++
+            }
+          }
+        }
       }
       if (prevCustomerIds.has(cId)) {
         retainedFromPrevCount++
@@ -297,15 +459,22 @@ export async function GET(request: Request) {
 
     // Repeat rate: Returning Customers / Active Customers * 100
     const repeatCustomerRate =
-      totalActiveCustomers > 0 ? (returningCustomersCount / totalActiveCustomers) * 100 : 0
+      totalActiveCustomers > 0 ? parseFloat(((returningCustomersCount / totalActiveCustomers) * 100).toFixed(1)) : 0
 
     // Customer retention rate: Customers from previous period who ordered again in current period / prevActiveCustomers * 100
     const customerRetentionRate =
-      prevActiveCustomers > 0 ? (retainedFromPrevCount / prevActiveCustomers) * 100 : null
+      prevActiveCustomers > 0 ? parseFloat(((retainedFromPrevCount / prevActiveCustomers) * 100).toFixed(1)) : null
 
-    // Revenue & Orders per Customer
-    const revenuePerCustomer = totalActiveCustomers > 0 ? currentRevenue / totalActiveCustomers : 0
-    const ordersPerCustomer = totalActiveCustomers > 0 ? currentOrderCount / totalActiveCustomers : 0
+    // Order Frequency = Valid Orders / Active Customers
+    const orderFrequency = totalActiveCustomers > 0 ? parseFloat((currentOrderCount / totalActiveCustomers).toFixed(2)) : 0
+
+    // Average Items Per Order = Total Items Sold / Valid Orders
+    const totalItemsInPeriod = validCurrent.reduce((sum, o) => sum + o.items.reduce((iSum, i) => iSum + i.quantity, 0), 0)
+    const avgItemsPerOrder = currentOrderCount > 0 ? parseFloat((totalItemsInPeriod / currentOrderCount).toFixed(1)) : 0
+
+    // Revenue Per Customer = Valid Revenue / Unique Customers
+    const revenuePerCustomer = totalActiveCustomers > 0 ? Math.round(grossSalesCurrent / totalActiveCustomers) : 0
+    const ordersPerCustomer = totalActiveCustomers > 0 ? parseFloat((currentOrderCount / totalActiveCustomers).toFixed(2)) : 0
 
     // Average Customer Lifetime Value (LTV) across active customers in this period
     let totalLtvSum = 0
@@ -313,7 +482,101 @@ export async function GET(request: Request) {
       const hist = customerHistMap.get(cId)
       if (hist) totalLtvSum += hist.totalSpend
     }
-    const avgCustomerLtv = totalActiveCustomers > 0 ? totalLtvSum / totalActiveCustomers : 0
+    const avgCustomerLtv = totalActiveCustomers > 0 ? Math.round(totalLtvSum / totalActiveCustomers) : 0
+
+    // ─────────────────────────────────────────────────────────────
+    // TIME-BASED RETENTION & REORDER GAP ANALYSIS
+    // ─────────────────────────────────────────────────────────────
+    let totalLifetimeCustomers = customerHistMap.size
+    let lifetimeWithGe2 = 0
+    let lifetimeWithGe3 = 0
+    let repeatWithin7Days = 0
+    let repeatWithin30Days = 0
+    let repeatWithin60Days = 0
+    let repeatWithin90Days = 0
+
+    let totalGapsSum = 0
+    let totalGapsCount = 0
+    let firstToSecondGapSum = 0
+    let firstToSecondGapCount = 0
+
+    const gapBuckets = {
+      "1-7 Days": 0,
+      "8-14 Days": 0,
+      "15-30 Days": 0,
+      "31-60 Days": 0,
+      "60+ Days": 0,
+    }
+
+    let dormantCustomersCount = 0
+    let churnedCustomersCount = 0
+
+    for (const c of customerHistMap.values()) {
+      const daysSinceLast = Math.max(0, Math.floor((nowMs - c.lastOrder.getTime()) / (1000 * 60 * 60 * 24)))
+      if (daysSinceLast > 90) {
+        churnedCustomersCount++
+      } else if (daysSinceLast > 30) {
+        dormantCustomersCount++
+      }
+
+      const ords = c.orders
+      if (ords.length >= 2) {
+        lifetimeWithGe2++
+        const firstTime = ords[0].created_at.getTime()
+        const secondTime = ords[1].created_at.getTime()
+        const firstGapDays = Math.max(0, (secondTime - firstTime) / (1000 * 60 * 60 * 24))
+        firstToSecondGapSum += firstGapDays
+        firstToSecondGapCount++
+
+        if (firstGapDays <= 7) repeatWithin7Days++
+        if (firstGapDays <= 30) repeatWithin30Days++
+        if (firstGapDays <= 60) repeatWithin60Days++
+        if (firstGapDays <= 90) repeatWithin90Days++
+
+        // Consecutive gaps
+        for (let i = 0; i < ords.length - 1; i++) {
+          const gap = Math.max(0, (ords[i + 1].created_at.getTime() - ords[i].created_at.getTime()) / (1000 * 60 * 60 * 24))
+          totalGapsSum += gap
+          totalGapsCount++
+
+          if (gap <= 7) gapBuckets["1-7 Days"]++
+          else if (gap <= 14) gapBuckets["8-14 Days"]++
+          else if (gap <= 30) gapBuckets["15-30 Days"]++
+          else if (gap <= 60) gapBuckets["31-60 Days"]++
+          else gapBuckets["60+ Days"]++
+        }
+      }
+
+      if (ords.length >= 3) {
+        lifetimeWithGe3++
+      }
+    }
+
+    const avgReorderGapDays = totalGapsCount > 0 ? parseFloat((totalGapsSum / totalGapsCount).toFixed(1)) : null
+    const avgDaysFirstToSecond = firstToSecondGapCount > 0 ? parseFloat((firstToSecondGapSum / firstToSecondGapCount).toFixed(1)) : null
+    const secondOrderConversionRate = totalLifetimeCustomers > 0 ? parseFloat(((lifetimeWithGe2 / totalLifetimeCustomers) * 100).toFixed(1)) : 0
+    const thirdOrderConversionRate = totalLifetimeCustomers > 0 ? parseFloat(((lifetimeWithGe3 / totalLifetimeCustomers) * 100).toFixed(1)) : 0
+
+    const repeatRate7Days = lifetimeWithGe2 > 0 ? parseFloat(((repeatWithin7Days / lifetimeWithGe2) * 100).toFixed(1)) : 0
+    const repeatRate30Days = lifetimeWithGe2 > 0 ? parseFloat(((repeatWithin30Days / lifetimeWithGe2) * 100).toFixed(1)) : 0
+    const repeatRate60Days = lifetimeWithGe2 > 0 ? parseFloat(((repeatWithin60Days / lifetimeWithGe2) * 100).toFixed(1)) : 0
+    const repeatRate90Days = lifetimeWithGe2 > 0 ? parseFloat(((repeatWithin90Days / lifetimeWithGe2) * 100).toFixed(1)) : 0
+
+    const customerChurnRate = totalLifetimeCustomers > 0 ? parseFloat(((churnedCustomersCount / totalLifetimeCustomers) * 100).toFixed(1)) : 0
+
+    // Order Conversion Funnel (1st Order -> 2nd Order -> 3rd+ Order)
+    const orderFunnel = [
+      { step: "1st Order", count: totalLifetimeCustomers, percent: 100 },
+      { step: "2nd Order", count: lifetimeWithGe2, percent: secondOrderConversionRate },
+      { step: "3rd+ Order", count: lifetimeWithGe3, percent: thirdOrderConversionRate },
+    ]
+
+    // Reorder Gap Distribution Array
+    const reorderGapDistribution = Object.entries(gapBuckets).map(([bucket, count]) => ({
+      bucket,
+      count,
+      percent: totalGapsCount > 0 ? parseFloat(((count / totalGapsCount) * 100).toFixed(1)) : 0,
+    }))
 
     // Customer Growth Trend (time series)
     const trendMap = new Map<
@@ -328,7 +591,6 @@ export async function GET(request: Request) {
       }
     >()
 
-    // Initialize trend buckets based on date duration
     const isSingleDay = range === "TODAY" || range === "YESTERDAY" || daysInPeriod <= 1
     if (isSingleDay) {
       for (let h = 0; h < 24; h++) {
@@ -426,7 +688,7 @@ export async function GET(request: Request) {
       source: s.source,
       orders: s.orders,
       revenue: Math.round(s.revenue),
-      percent: currentRevenue > 0 ? parseFloat(((s.revenue / currentRevenue) * 100).toFixed(1)) : 0,
+      percent: grossSalesCurrent > 0 ? parseFloat(((s.revenue / grossSalesCurrent) * 100).toFixed(1)) : 0,
     }))
 
     // Orders by Order Type
@@ -443,16 +705,15 @@ export async function GET(request: Request) {
       label: t.type.replace(/_/g, " "),
       orders: t.orders,
       revenue: Math.round(t.revenue),
-      percent: currentRevenue > 0 ? parseFloat(((t.revenue / currentRevenue) * 100).toFixed(1)) : 0,
+      percent: grossSalesCurrent > 0 ? parseFloat(((t.revenue / grossSalesCurrent) * 100).toFixed(1)) : 0,
     }))
 
-    // Customer Location / Area Performance (extract from delivery_address_snapshot)
+    // Customer Location / Area Performance
     const areaMap = new Map<string, { area: string; orders: number; revenue: number }>()
     for (const o of validCurrent) {
       if (o.delivery_address_snapshot && o.delivery_address_snapshot.trim()) {
         const parts = o.delivery_address_snapshot.split(",")
-        const areaCandidate =
-          parts.length >= 2 ? parts[parts.length - 2].trim() : parts[0].trim()
+        const areaCandidate = parts.length >= 2 ? parts[parts.length - 2].trim() : parts[0].trim()
         const areaName = areaCandidate.slice(0, 30) || "Local"
         const existing = areaMap.get(areaName) || { area: areaName, orders: 0, revenue: 0 }
         existing.orders++
@@ -470,7 +731,7 @@ export async function GET(request: Request) {
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 8)
 
-    // Loyalty Customers vs Non-Loyalty Customers
+    // Loyalty vs Non-Loyalty
     let loyaltyOrders = 0
     let loyaltyRevenue = 0
     const loyaltyCustSet = new Set<string>()
@@ -506,11 +767,38 @@ export async function GET(request: Request) {
       },
     }
 
-    // Customer RFM & Segmentation
-    // Recency = days since last order
-    // Frequency = number of valid orders
-    // Monetary = total valid customer spend
-    const nowMs = now.getTime()
+    // Customer Preference Analytics (Veg vs Non-Veg, Favourite Dish/Category)
+    let vegItemsSold = 0
+    let nonVegItemsSold = 0
+    const dishCountMap = new Map<string, number>()
+    const catCountMap = new Map<string, number>()
+
+    for (const o of validCurrent) {
+      for (const it of o.items) {
+        const mi = menuItemLookup.get(it.menu_item_id)
+        if (mi) {
+          if (mi.is_veg) vegItemsSold += it.quantity
+          else nonVegItemsSold += it.quantity
+          if (mi.category?.name) {
+            catCountMap.set(mi.category.name, (catCountMap.get(mi.category.name) || 0) + it.quantity)
+          }
+        }
+        dishCountMap.set(it.item_name_snapshot, (dishCountMap.get(it.item_name_snapshot) || 0) + it.quantity)
+      }
+    }
+
+    const totalPreferenceItems = vegItemsSold + nonVegItemsSold
+    const vegPreference = {
+      vegUnits: vegItemsSold,
+      nonVegUnits: nonVegItemsSold,
+      vegPercent: totalPreferenceItems > 0 ? parseFloat(((vegItemsSold / totalPreferenceItems) * 100).toFixed(1)) : 50,
+      nonVegPercent: totalPreferenceItems > 0 ? parseFloat(((nonVegItemsSold / totalPreferenceItems) * 100).toFixed(1)) : 50,
+    }
+
+    const favouriteDish = [...dishCountMap.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "N/A"
+    const favouriteCategory = [...catCountMap.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "N/A"
+
+    // RFM Analysis, Segments, and Decision Action Table
     const allCustomersList = Array.from(customerHistMap.values())
     const spendThreshold80 =
       allCustomersList.length > 0
@@ -528,54 +816,95 @@ export async function GET(request: Request) {
       CHURNED: 0,
     }
 
-    const topCustomersList: any[] = []
+    let atRiskSpendTotal = 0
+    const customerActionTable: any[] = []
 
     for (const c of allCustomersList) {
       const daysSinceLastOrder = Math.max(0, Math.floor((nowMs - c.lastOrder.getTime()) / (1000 * 60 * 60 * 24)))
       let segment = "REGULAR"
 
-      if (c.ordersCount >= 1 && c.totalSpend >= spendThreshold80) {
+      if (c.orders.length >= 1 && c.totalSpend >= spendThreshold80) {
         segment = "HIGH_VALUE"
         segmentCounts.HIGH_VALUE++
-      } else if (c.ordersCount >= 5 && daysSinceLastOrder <= 30) {
+      } else if (c.orders.length >= 4 && daysSinceLastOrder <= 30) {
         segment = "LOYAL"
         segmentCounts.LOYAL++
-      } else if (c.ordersCount === 1 && daysSinceLastOrder <= 30) {
+      } else if (c.orders.length === 1 && daysSinceLastOrder <= 30) {
         segment = "NEW"
         segmentCounts.NEW++
-      } else if (c.ordersCount >= 2 && daysSinceLastOrder > 60) {
+      } else if (c.orders.length >= 2 && daysSinceLastOrder > 60) {
         segment = "CHURNED"
         segmentCounts.CHURNED++
-      } else if (c.ordersCount >= 2 && daysSinceLastOrder > 30) {
+      } else if (c.orders.length >= 2 && daysSinceLastOrder > 30) {
         segment = "AT_RISK"
         segmentCounts.AT_RISK++
+        atRiskSpendTotal += c.totalSpend
       } else {
         segment = "REGULAR"
         segmentCounts.REGULAR++
       }
 
-      // Check spend in current period
+      // Customer individual reorder gap
+      let custAvgGap: number | null = null
+      if (c.orders.length >= 2) {
+        let gSum = 0
+        for (let i = 0; i < c.orders.length - 1; i++) {
+          gSum += (c.orders[i + 1].created_at.getTime() - c.orders[i].created_at.getTime()) / (1000 * 60 * 60 * 24)
+        }
+        custAvgGap = parseFloat((gSum / (c.orders.length - 1)).toFixed(1))
+      }
+
+      // Customer favourite item
+      const itemMap = new Map<string, number>()
+      for (const ord of c.orders) {
+        for (const it of ord.items) {
+          itemMap.set(it.item_name_snapshot, (itemMap.get(it.item_name_snapshot) || 0) + it.quantity)
+        }
+      }
+      const topItem = [...itemMap.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "Various dishes"
+
+      // Churn risk classification
+      const churnRisk = daysSinceLastOrder > 60 ? "HIGH" : daysSinceLastOrder > 30 ? "MEDIUM" : "LOW"
+
+      // Actionable recommendation
+      let suggestedAction = "Maintain service excellence"
+      if (churnRisk === "HIGH") {
+        suggestedAction = "Send 20% win-back discount via WhatsApp"
+      } else if (churnRisk === "MEDIUM") {
+        suggestedAction = "Send 'We miss you' reminder with weekend combo"
+      } else if (segment === "LOYAL" || segment === "HIGH_VALUE") {
+        suggestedAction = "Award VIP loyalty bonus points"
+      } else if (segment === "NEW") {
+        suggestedAction = "Send automated 2nd-order welcome voucher"
+      }
+
+      // Period spend
       const currentPeriodOrders = validCurrent.filter((o) => o.customer_id === c.id)
       const currentPeriodRevenue = currentPeriodOrders.reduce((sum, o) => sum + o.total, 0)
 
-      if (currentPeriodOrders.length > 0) {
-        topCustomersList.push({
-          id: c.id,
-          name: c.name || "Customer",
-          phone: c.phone,
-          orders: currentPeriodOrders.length,
-          revenue: Math.round(currentPeriodRevenue),
-          aov: Math.round(currentPeriodRevenue / currentPeriodOrders.length),
-          lifetimeOrders: c.ordersCount,
-          lifetimeSpend: Math.round(c.totalSpend),
-          lastOrder: c.lastOrder,
-          daysSinceLast: daysSinceLastOrder,
-          segment,
-        })
-      }
+      customerActionTable.push({
+        id: c.id,
+        name: c.name || "Valued Customer",
+        phone: c.phone,
+        segment,
+        periodRevenue: Math.round(currentPeriodRevenue),
+        periodOrders: currentPeriodOrders.length,
+        lifetimeSpend: Math.round(c.totalSpend),
+        lifetimeOrders: c.orders.length,
+        aov: currentPeriodOrders.length > 0 ? Math.round(currentPeriodRevenue / currentPeriodOrders.length) : Math.round(c.totalSpend / c.orders.length),
+        firstOrder: c.firstOrder,
+        lastOrder: c.lastOrder,
+        daysSinceLastOrder,
+        reorderGap: custAvgGap !== null ? `${custAvgGap} days` : "Single Order",
+        favouriteDish: topItem,
+        churnRisk,
+        suggestedAction,
+      })
     }
 
-    const topCustomers = topCustomersList.sort((a, b) => b.revenue - a.revenue).slice(0, 10)
+    const topCustomers = [...customerActionTable]
+      .sort((a, b) => b.periodRevenue - a.periodRevenue || b.lifetimeSpend - a.lifetimeSpend)
+      .slice(0, 15)
 
     // Customer Cohort Retention (Monthly Cohorts)
     const cohortMap = new Map<string, { cohortMonth: string; totalNew: Set<string>; monthReturns: Map<number, Set<string>> }>()
@@ -595,7 +924,6 @@ export async function GET(request: Request) {
       const cohort = cohortMap.get(firstMonthStr)!
       cohort.totalNew.add(ord.customer_id)
 
-      // Month difference between order and cohort acquisition
       const orderMonthIndex =
         (ord.created_at.getFullYear() - custHist.firstOrder.getFullYear()) * 12 +
         (ord.created_at.getMonth() - custHist.firstOrder.getMonth())
@@ -628,27 +956,8 @@ export async function GET(request: Request) {
       })
 
     // ─────────────────────────────────────────────────────────────
-    // 4. SECTION 2: PRODUCT ANALYTICS
+    // 5. SECTION 2: PRODUCT / MENU ANALYTICS & PROFITABILITY
     // ─────────────────────────────────────────────────────────────
-    // Build recipe cost lookup from active MenuItems
-    const menuItemLookup = new Map<string, (typeof allMenuItems)[0]>()
-    const recipeCostMap = new Map<string, { cost: number; hasRecipe: boolean }>()
-
-    for (const item of allMenuItems) {
-      menuItemLookup.set(item.id, item)
-      let cost = 0
-      let hasRecipe = false
-      if (item.ingredients && item.ingredients.length > 0) {
-        hasRecipe = true
-        for (const ing of item.ingredients) {
-          const unitCost = ing.inventoryItem?.cost_per_unit ? Number(ing.inventoryItem.cost_per_unit) : 0
-          cost += Number(ing.quantity) * unitCost
-        }
-      }
-      recipeCostMap.set(item.id, { cost, hasRecipe })
-    }
-
-    // Aggregate Current Period Product Sales
     const productStatsMap = new Map<
       string,
       {
@@ -658,26 +967,72 @@ export async function GET(request: Request) {
         unitsSold: number
         revenue: number
         ordersCount: Set<string>
+        customerIds: Set<string>
+        repeatCustomerIds: Set<string>
+        multiItemOrdersCount: number
+        cancelledCount: number
       }
     >()
 
+    // Prepopulate map with active MenuItems to detect 0-sales items
+    for (const item of allMenuItems) {
+      productStatsMap.set(item.id, {
+        id: item.id,
+        name: item.name,
+        categoryName: item.category?.name || "General",
+        unitsSold: 0,
+        revenue: 0,
+        ordersCount: new Set(),
+        customerIds: new Set(),
+        repeatCustomerIds: new Set(),
+        multiItemOrdersCount: 0,
+        cancelledCount: 0,
+      })
+    }
+
     for (const order of validCurrent) {
+      const orderItemCount = order.items.length
+      const hasOtherItems = orderItemCount > 1
+
       for (const it of order.items) {
-        const existing = productStatsMap.get(it.menu_item_id)
-        if (existing) {
-          existing.unitsSold += it.quantity
-          existing.revenue += it.line_total
-          existing.ordersCount.add(order.id)
-        } else {
+        let entry = productStatsMap.get(it.menu_item_id)
+        if (!entry) {
           const mi = menuItemLookup.get(it.menu_item_id)
-          productStatsMap.set(it.menu_item_id, {
+          entry = {
             id: it.menu_item_id,
             name: it.item_name_snapshot,
             categoryName: mi?.category?.name || "General",
-            unitsSold: it.quantity,
-            revenue: it.line_total,
-            ordersCount: new Set([order.id]),
-          })
+            unitsSold: 0,
+            revenue: 0,
+            ordersCount: new Set(),
+            customerIds: new Set(),
+            repeatCustomerIds: new Set(),
+            multiItemOrdersCount: 0,
+            cancelledCount: 0,
+          }
+          productStatsMap.set(it.menu_item_id, entry)
+        }
+
+        entry.unitsSold += it.quantity
+        entry.revenue += it.line_total
+        entry.ordersCount.add(order.id)
+        if (entry.customerIds.has(order.customer_id)) {
+          entry.repeatCustomerIds.add(order.customer_id)
+        } else {
+          entry.customerIds.add(order.customer_id)
+        }
+        if (hasOtherItems) {
+          entry.multiItemOrdersCount++
+        }
+      }
+    }
+
+    // Tally cancellations
+    for (const order of allOrdersInPeriod) {
+      if (order.status === "CANCELLED" || order.status === "REJECTED") {
+        for (const it of order.items) {
+          const entry = productStatsMap.get(it.menu_item_id)
+          if (entry) entry.cancelledCount += it.quantity
         }
       }
     }
@@ -691,20 +1046,53 @@ export async function GET(request: Request) {
       }
     }
 
+    // Calculate Product Metrics
     const productList = Array.from(productStatsMap.values()).map((p) => {
       const units = p.unitsSold
       const rev = Math.round(p.revenue)
       const asp = units > 0 ? parseFloat((rev / units).toFixed(2)) : 0
       const penetration = currentOrderCount > 0 ? parseFloat(((p.ordersCount.size / currentOrderCount) * 100).toFixed(1)) : 0
-      const contribution = currentRevenue > 0 ? parseFloat(((rev / currentRevenue) * 100).toFixed(1)) : 0
+      const contribution = grossSalesCurrent > 0 ? parseFloat(((rev / grossSalesCurrent) * 100).toFixed(1)) : 0
       const prevRev = prevProductRevenueMap.get(p.id) || 0
       const growth = calcGrowth(rev, prevRev)
 
+      // Repeat Purchase Rate
+      const buyersCount = p.customerIds.size
+      const repeatBuyersCount = p.repeatCustomerIds.size
+      const repeatPurchaseRate = buyersCount > 0 ? parseFloat(((repeatBuyersCount / buyersCount) * 100).toFixed(1)) : 0
+
+      // Attach Rate
+      const totalOrdersWithItem = p.ordersCount.size
+      const attachRate = totalOrdersWithItem > 0 ? parseFloat(((p.multiItemOrdersCount / totalOrdersWithItem) * 100).toFixed(1)) : 0
+
+      // Cancellation Rate
+      const totalOrderedWithItem = units + p.cancelledCount
+      const cancellationRate = totalOrderedWithItem > 0 ? parseFloat(((p.cancelledCount / totalOrderedWithItem) * 100).toFixed(1)) : 0
+
+      // Recipe & Profitability
       const recipeInfo = recipeCostMap.get(p.id)
       const hasRecipe = recipeInfo?.hasRecipe || false
       const unitCost = hasRecipe ? recipeInfo!.cost : null
-      const grossProfit = unitCost !== null && asp > 0 ? asp - unitCost : null
+      const grossProfit = unitCost !== null && asp > 0 ? parseFloat((asp - unitCost).toFixed(2)) : null
       const grossMarginPercent = grossProfit !== null && asp > 0 ? parseFloat(((grossProfit / asp) * 100).toFixed(1)) : null
+      const foodCostPercent = unitCost !== null && asp > 0 ? parseFloat(((unitCost / asp) * 100).toFixed(1)) : null
+      const totalContribution = grossProfit !== null ? Math.round(grossProfit * units) : null
+
+      // Product Lifecycle
+      const mi = menuItemLookup.get(p.id)
+      const createdAt = mi?.created_at ? new Date(mi.created_at) : new Date(0)
+      const daysSinceCreation = Math.floor((nowMs - createdAt.getTime()) / (1000 * 60 * 60 * 24))
+
+      let lifecycle = "STABLE"
+      if (daysSinceCreation <= 30) {
+        lifecycle = "NEW"
+      } else if (growth !== null && growth > 15) {
+        lifecycle = "GROWING"
+      } else if (growth !== null && growth < -15) {
+        lifecycle = "DECLINING"
+      } else if (units === 0) {
+        lifecycle = "AT_RISK"
+      }
 
       return {
         id: p.id,
@@ -717,37 +1105,43 @@ export async function GET(request: Request) {
         penetration,
         contribution,
         growth,
+        repeatPurchaseRate,
+        attachRate,
+        cancellationRate,
+        lifecycle,
         unitCost: unitCost !== null ? parseFloat(unitCost.toFixed(2)) : null,
-        grossProfit: grossProfit !== null ? parseFloat(grossProfit.toFixed(2)) : null,
+        grossProfit,
         grossMarginPercent,
+        foodCostPercent,
+        totalContribution,
         hasRecipe,
       }
     })
 
-    // Compute Product Performance Matrix Quadrants
+    // Compute Product Performance Matrix (Sales Volume x Margin)
+    const activeProductsWithSales = productList.filter((p) => p.unitsSold > 0)
     const medianUnits =
-      productList.length > 0
-        ? [...productList].sort((a, b) => a.unitsSold - b.unitsSold)[Math.floor(productList.length / 2)]?.unitsSold || 5
+      activeProductsWithSales.length > 0
+        ? [...activeProductsWithSales].sort((a, b) => a.unitsSold - b.unitsSold)[Math.floor(activeProductsWithSales.length / 2)]?.unitsSold || 5
         : 5
 
     const productsWithMatrix = productList.map((p) => {
-      // If recipe is configured, use grossMarginPercent (benchmark 60%); else use revenue contribution benchmark
       const isHighMargin =
         p.grossMarginPercent !== null ? p.grossMarginPercent >= 60 : p.contribution >= 5
       const isHighVolume = p.unitsSold >= medianUnits
 
-      let quadrant = "DOG" // Underperformer
+      let quadrant = "DOG"
       let quadrantLabel = "Underperformer"
       let actionSuggestion = "Low volume and profitability. Review recipe appeal or consider rotating."
 
       if (isHighVolume && isHighMargin) {
         quadrant = "STAR"
         quadrantLabel = "Star Product"
-        actionSuggestion = "High sales and high profitability! Ensure kitchen ingredients are never out of stock."
+        actionSuggestion = "High sales and high margin! Ensure kitchen ingredients are never out of stock."
       } else if (isHighVolume && !isHighMargin) {
         quadrant = "CASH_COW"
         quadrantLabel = "Cash Cow"
-        actionSuggestion = "Customer favorite. Optimize portion sizing or adjust price slightly to improve margin."
+        actionSuggestion = "Volume driver. Optimize portion weight by 5% to boost profitability."
       } else if (!isHighVolume && isHighMargin) {
         quadrant = "PUZZLE"
         quadrantLabel = "Opportunity"
@@ -766,20 +1160,23 @@ export async function GET(request: Request) {
     const topProductsByQuantity = [...productsWithMatrix].sort((a, b) => b.unitsSold - a.unitsSold).slice(0, 10)
 
     // Category Performance
-    const categoryStatsMap = new Map<string, { category: string; unitsSold: number; revenue: number; ordersCount: Set<string> }>()
+    const categoryStatsMap = new Map<string, { category: string; unitsSold: number; revenue: number; ordersCount: Set<string>; itemsCount: number }>()
     for (const p of productsWithMatrix) {
       const cat = p.categoryName || "General"
-      const existing = categoryStatsMap.get(cat) || { category: cat, unitsSold: 0, revenue: 0, ordersCount: new Set() }
+      const existing = categoryStatsMap.get(cat) || { category: cat, unitsSold: 0, revenue: 0, ordersCount: new Set(), itemsCount: 0 }
       existing.unitsSold += p.unitsSold
       existing.revenue += p.revenue
+      existing.itemsCount++
       categoryStatsMap.set(cat, existing)
     }
+
     const categoryPerformance = Array.from(categoryStatsMap.values())
       .map((c) => ({
         category: c.category,
         unitsSold: c.unitsSold,
         revenue: Math.round(c.revenue),
-        contribution: currentRevenue > 0 ? parseFloat(((c.revenue / currentRevenue) * 100).toFixed(1)) : 0,
+        contribution: grossSalesCurrent > 0 ? parseFloat(((c.revenue / grossSalesCurrent) * 100).toFixed(1)) : 0,
+        itemsCount: c.itemsCount,
       }))
       .sort((a, b) => b.revenue - a.revenue)
 
@@ -823,23 +1220,6 @@ export async function GET(request: Request) {
       .sort((a, b) => b.count - a.count)
       .slice(0, 6)
 
-    // Variants and Addons Analysis
-    const totalVariantsCount = allMenuItems.reduce((sum, m) => sum + (m.variants?.length || 0), 0)
-    const totalAddonsCount = allMenuItems.reduce((sum, m) => sum + (m.addons?.length || 0), 0)
-
-    const variantsData = {
-      available: totalVariantsCount > 0,
-      message: totalVariantsCount > 0 ? undefined : "No item variants configured in Menu.",
-      count: totalVariantsCount,
-    }
-
-    const addonsData = {
-      available: totalAddonsCount > 0,
-      message: totalAddonsCount > 0 ? undefined : "No add-ons configured in Menu.",
-      count: totalAddonsCount,
-      attachRate: 0,
-    }
-
     // Product Trends (Revenue and Units Timeline)
     const productTrends = customerGrowthTrend.map((t) => ({
       date: t.date,
@@ -850,27 +1230,45 @@ export async function GET(request: Request) {
         .reduce((sum, o) => sum + o.items.reduce((iSum, it) => iSum + it.quantity, 0), 0),
     }))
 
-    // Total units sold across all products
     const totalUnitsSold = productsWithMatrix.reduce((sum, p) => sum + p.unitsSold, 0)
     const prevUnitsSold = validPrev.reduce((sum, o) => sum + o.items.reduce((iSum, it) => iSum + it.quantity, 0), 0)
     const unitsSoldGrowth = calcGrowth(totalUnitsSold, prevUnitsSold)
 
+    // Product Action Table
+    const productActionTable = [...productsWithMatrix]
+      .sort((a, b) => b.revenue - a.revenue)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        category: p.categoryName,
+        lifecycle: p.lifecycle,
+        unitsSold: p.unitsSold,
+        revenue: p.revenue,
+        contribution: p.contribution,
+        foodCostPercent: p.foodCostPercent,
+        grossMarginPercent: p.grossMarginPercent,
+        repeatPurchaseRate: p.repeatPurchaseRate,
+        attachRate: p.attachRate,
+        suggestedAction: p.actionSuggestion,
+      }))
+
     // ─────────────────────────────────────────────────────────────
-    // 5. SECTION 3: INVENTORY & WASTE ANALYTICS
+    // 6. SECTION 3: INVENTORY, INGREDIENT IMPACT & WASTE ANALYTICS
     // ─────────────────────────────────────────────────────────────
     let totalInventoryValuation = 0
+    let openingInventoryValuation = 0
     const lowStockItems: any[] = []
     const outOfStockItems: any[] = []
 
     for (const inv of allInventoryItems) {
       const q = Number(inv.quantity)
+      const openingQ = Number(inv.opening_stock)
       const cost = inv.cost_per_unit ? Number(inv.cost_per_unit) : 0
       const minStock = Number(inv.minimum_stock)
       const reorderLvl = Number(inv.reorder_level)
 
-      if (cost && q > 0) {
-        totalInventoryValuation += q * cost
-      }
+      if (cost && q > 0) totalInventoryValuation += q * cost
+      if (cost && openingQ > 0) openingInventoryValuation += openingQ * cost
 
       if (q <= 0) {
         outOfStockItems.push({
@@ -954,7 +1352,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Previous period inventory transactions for comparisons
     let prevPurchasedCost = 0
     let prevConsumedCost = 0
     let prevWastedCost = 0
@@ -975,6 +1372,22 @@ export async function GET(request: Request) {
         ? parseFloat(((stockWastedCost / (stockConsumedCost + stockWastedCost)) * 100).toFixed(1))
         : 0
 
+    // Inventory Turnover = COGS consumption cost / Average Inventory Value
+    const avgInventoryValuation = (openingInventoryValuation + totalInventoryValuation) / 2 || totalInventoryValuation
+    const inventoryTurnover = avgInventoryValuation > 0
+      ? parseFloat((stockConsumedCost / avgInventoryValuation).toFixed(2))
+      : null
+
+    // Stockout rate = outOfStock / totalItems * 100
+    const stockoutRate = allInventoryItems.length > 0
+      ? parseFloat(((outOfStockItems.length / allInventoryItems.length) * 100).toFixed(1))
+      : 0
+
+    // GMROI (Gross Margin Return on Inventory)
+    const gmroi = currentGrossProfit !== null && avgInventoryValuation > 0
+      ? parseFloat((currentGrossProfit / avgInventoryValuation).toFixed(2))
+      : null
+
     // Expected vs Actual Consumption (for menu items with recipe ingredients)
     const expectedIngredientConsumption = new Map<
       string,
@@ -984,10 +1397,10 @@ export async function GET(request: Request) {
         unit: string
         expectedQty: number
         actualQty: number
+        costPerUnit: number
       }
     >()
 
-    // Initialize with active ingredients
     for (const inv of allInventoryItems) {
       expectedIngredientConsumption.set(inv.id, {
         id: inv.id,
@@ -995,10 +1408,10 @@ export async function GET(request: Request) {
         unit: inv.unit,
         expectedQty: 0,
         actualQty: 0,
+        costPerUnit: inv.cost_per_unit ? Number(inv.cost_per_unit) : 0,
       })
     }
 
-    // Compute expected quantity from sold items
     for (const p of productsWithMatrix) {
       const mi = menuItemLookup.get(p.id)
       if (mi && mi.ingredients) {
@@ -1011,7 +1424,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Compute actual deductions from ORDER_DEDUCTION transactions
     for (const tx of allPeriodTransactions) {
       if (tx.type === "ORDER_DEDUCTION") {
         const entry = expectedIngredientConsumption.get(tx.inventory_item_id)
@@ -1026,6 +1438,7 @@ export async function GET(request: Request) {
       .map((c) => {
         const variance = c.actualQty - c.expectedQty
         const variancePercent = c.expectedQty > 0 ? parseFloat(((variance / c.expectedQty) * 100).toFixed(1)) : null
+        const varianceCost = Math.round(variance * c.costPerUnit)
         return {
           id: c.id,
           name: c.name,
@@ -1034,6 +1447,7 @@ export async function GET(request: Request) {
           actualQty: parseFloat(c.actualQty.toFixed(2)),
           variance: parseFloat(variance.toFixed(2)),
           variancePercent,
+          varianceCost,
           status:
             variancePercent === null
               ? "Unlinked Recipe"
@@ -1081,7 +1495,100 @@ export async function GET(request: Request) {
       .filter((r) => r.isStockoutRisk)
       .sort((a, b) => (a.daysRemaining ?? 999) - (b.daysRemaining ?? 999))
 
-    // Waste by Ingredient array
+    // ─────────────────────────────────────────────────────────────
+    // INGREDIENT -> PRODUCT IMPACT ANALYSIS
+    // ─────────────────────────────────────────────────────────────
+    const ingredientProductImpact = stockoutApproaching.map((item) => {
+      // Find all menu items that depend on this ingredient
+      const affectedMenuItems = allMenuItems.filter((m) =>
+        m.ingredients?.some((ing) => ing.inventory_item_id === item.id)
+      )
+
+      const dishNames = affectedMenuItems.map((m) => m.name)
+
+      // Calculate servings remaining based on smallest recipe requirement
+      let minServings = 999
+      let dailyAffectedRevenue = 0
+
+      for (const m of affectedMenuItems) {
+        const ingLink = m.ingredients?.find((i) => i.inventory_item_id === item.id)
+        if (ingLink && Number(ingLink.quantity) > 0) {
+          const possibleServings = Math.floor(item.currentStock / Number(ingLink.quantity))
+          if (possibleServings < minServings) minServings = possibleServings
+        }
+
+        const prodStat = productStatsMap.get(m.id)
+        if (prodStat && daysInPeriod > 0) {
+          dailyAffectedRevenue += prodStat.revenue / daysInPeriod
+        }
+      }
+
+      if (minServings === 999) minServings = 0
+      const daysShortfall = item.daysRemaining !== null ? Math.max(0, 3 - item.daysRemaining) : 2
+      const salesAtRisk = Math.round(dailyAffectedRevenue * Math.max(1, daysShortfall))
+
+      return {
+        ingredientId: item.id,
+        name: item.name,
+        currentStock: item.currentStock,
+        unit: item.unit,
+        daysRemaining: item.daysRemaining,
+        dishesAffected: dishNames,
+        dishesCount: dishNames.length,
+        servingsRemaining: minServings,
+        salesAtRisk,
+        reorderLevel: item.reorderLevel,
+        suggestedReorder: item.suggestedReorder,
+        reorderStatus: item.currentStock <= 0 ? "OUT_OF_STOCK" : item.daysRemaining !== null && item.daysRemaining <= 2 ? "CRITICAL" : "REORDER_SOON",
+      }
+    })
+
+    // Inventory Action Table
+    const inventoryActionTable = allInventoryItems.map((inv) => {
+      const q = Number(inv.quantity)
+      const reorderAnalysisItem = reorderAnalysis.find((r) => r.id === inv.id)
+      const varianceItem = consumptionVariance.find((v) => v.id === inv.id)
+      const wastedItem = wasteByIngredientMap.get(inv.name)
+
+      const daysRem = reorderAnalysisItem?.daysRemaining ?? null
+      let reorderStatus = "HEALTHY"
+      let priority = "LOW"
+      let suggestedAction = "Stock level healthy"
+
+      if (q <= 0) {
+        reorderStatus = "OUT_OF_STOCK"
+        priority = "HIGH"
+        suggestedAction = `Immediate purchase needed (${reorderAnalysisItem?.suggestedReorder || inv.reorder_level} ${inv.unit})`
+      } else if (daysRem !== null && daysRem <= 3) {
+        reorderStatus = "CRITICAL"
+        priority = "HIGH"
+        suggestedAction = `Place order today (~${daysRem} days remaining)`
+      } else if (q <= Number(inv.minimum_stock)) {
+        reorderStatus = "LOW_STOCK"
+        priority = "MEDIUM"
+        suggestedAction = `Below minimum stock (${inv.minimum_stock} ${inv.unit})`
+      } else if (varianceItem && varianceItem.variancePercent !== null && varianceItem.variancePercent > 10) {
+        reorderStatus = "LEAKAGE_RISK"
+        priority = "MEDIUM"
+        suggestedAction = `Audit portion control (+${varianceItem.variancePercent}% variance)`
+      }
+
+      return {
+        id: inv.id,
+        name: inv.name,
+        unit: inv.unit,
+        currentStock: q,
+        daysRemaining: daysRem !== null ? `${daysRem} days` : "No usage",
+        consumption: reorderAnalysisItem ? `${reorderAnalysisItem.consumedInPeriod} ${inv.unit}` : "0",
+        variance: varianceItem?.variancePercent !== null && varianceItem?.variancePercent !== undefined ? `${varianceItem.variancePercent > 0 ? "+" : ""}${varianceItem.variancePercent}%` : "0%",
+        wasteCost: wastedItem ? `₹${Math.round(wastedItem.cost).toLocaleString()}` : "₹0",
+        reorderStatus,
+        priority,
+        suggestedAction,
+      }
+    })
+
+    // Waste arrays
     const wasteByIngredient = Array.from(wasteByIngredientMap.values())
       .map((w) => ({
         name: w.name,
@@ -1091,7 +1598,6 @@ export async function GET(request: Request) {
       }))
       .sort((a, b) => b.cost - a.cost)
 
-    // Waste by Reason array
     const wasteByReason = Array.from(wasteByReasonMap.values())
       .map((r) => ({
         reason: r.reason,
@@ -1100,170 +1606,146 @@ export async function GET(request: Request) {
       }))
       .sort((a, b) => b.cost - a.cost)
 
-    // Consumption Timeline
     const inventoryConsumptionTrend = Array.from(consumptionByDateMap.values()).sort((a, b) =>
       a.date.localeCompare(b.date)
     )
 
     // ─────────────────────────────────────────────────────────────
-    // 6. SECTION 4: BUSINESS INSIGHTS GENERATION
+    // 7. OWNER ALERTS & BUSINESS INSIGHTS
+    // Format: Issue -> Cause -> Financial/Business Impact -> Recommended Action -> Priority
     // ─────────────────────────────────────────────────────────────
-    const insights: Array<{
+    const ownerAlerts: Array<{
       id: string
-      type: "success" | "warning" | "opportunity" | "info"
+      priority: "HIGH" | "MEDIUM" | "LOW"
       badge: string
-      title: string
-      what: string
-      why: string
-      action: string
+      issue: string
+      cause: string
+      financialImpact: string
+      recommendedAction: string
       actionLink?: string
     }> = []
 
-    // 1. Revenue Trajectory Insight
-    if (revenueGrowth !== null) {
-      if (revenueGrowth > 5) {
-        insights.push({
-          id: "revenue-growth",
-          type: "success",
+    // 1. Sales Trend Alert
+    if (grossSalesGrowth !== null) {
+      if (grossSalesGrowth < -5) {
+        ownerAlerts.push({
+          id: "alert-sales-decline",
+          priority: "HIGH",
+          badge: "📉 Sales Drop",
+          issue: `Gross Sales Below Normal Trend (${grossSalesGrowth}%)`,
+          cause: `Valid order revenue dropped compared to the previous equivalent period (₹${Math.round(grossSalesCurrent).toLocaleString()} vs ₹${Math.round(grossSalesPrev).toLocaleString()}).`,
+          financialImpact: `₹${Math.round(grossSalesPrev - grossSalesCurrent).toLocaleString()} lower revenue intake.`,
+          recommendedAction: "Dispatch a targeted promotional offer to regular customers via Customer Offers.",
+          actionLink: "/customers/offers",
+        })
+      } else if (grossSalesGrowth > 10) {
+        ownerAlerts.push({
+          id: "alert-sales-growth",
+          priority: "LOW",
           badge: "📈 Strong Growth",
-          title: "Revenue Accelerated",
-          what: `Total revenue rose by +${revenueGrowth}% (₹${Math.round(currentRevenue).toLocaleString()} vs ₹${Math.round(prevRevenue).toLocaleString()} in previous period).`,
-          why: "Higher ordering velocity and basket values are driving positive business momentum.",
-          action: "Maintain current promotions and ensure kitchen prep handles the increased peak-hour volume.",
-        })
-      } else if (revenueGrowth < -5) {
-        insights.push({
-          id: "revenue-decline",
-          type: "warning",
-          badge: "📉 Revenue Dip",
-          title: "Revenue Declined vs Previous Period",
-          what: `Revenue fell by ${revenueGrowth}% compared to the equivalent prior period (₹${Math.round(currentRevenue).toLocaleString()} vs ₹${Math.round(prevRevenue).toLocaleString()}).`,
-          why: "Slower order count or reduced average order value is reducing cash inflow.",
-          action: "Launch a WhatsApp broadcast promotion to inactive customers via Customer Offers.",
-          actionLink: "/customers/offers",
+          issue: `Sales Revenue Surged by +${grossSalesGrowth}%`,
+          cause: `Customer order velocity and ticket sizes accelerated vs previous period (₹${Math.round(grossSalesCurrent).toLocaleString()} vs ₹${Math.round(grossSalesPrev).toLocaleString()}).`,
+          financialImpact: `+₹${Math.round(grossSalesCurrent - grossSalesPrev).toLocaleString()} added top-line revenue.`,
+          recommendedAction: "Review inventory stock cover to support higher sales velocity.",
+          actionLink: "/inventory",
         })
       }
     }
 
-    // 2. Customer Retention & Repeat Rate Insight
-    if (totalActiveCustomers > 0) {
-      if (repeatCustomerRate >= 40) {
-        insights.push({
-          id: "retention-high",
-          type: "success",
-          badge: "👥 Loyal Base",
-          title: "High Customer Loyalty",
-          what: `${repeatCustomerRate.toFixed(1)}% of customers ordering in this period are repeat diners (${returningCustomersCount} returning).`,
-          why: "Repeat customers spend consistently and cost significantly less to serve than acquiring new customers.",
-          action: "Reward loyal diners with bonus points to sustain high lifetime value.",
-          actionLink: "/customers",
-        })
-      } else if (repeatCustomerRate < 20 && totalActiveCustomers >= 5) {
-        insights.push({
-          id: "retention-low",
-          type: "opportunity",
-          badge: "💡 Retention Opportunity",
-          title: "Room to Grow Repeat Orders",
-          what: `Only ${repeatCustomerRate.toFixed(1)}% of diners are returning customers (${newCustomersCount} are first-time buyers).`,
-          why: "Converting first-time diners into regulars is the most cost-effective lever to double restaurant revenue.",
-          action: "Dispatch an automated second-order discount via WhatsApp within 5 days of their initial order.",
-          actionLink: "/customers/offers",
-        })
-      }
-    }
-
-    // 3. At-Risk High-Value Customers
+    // 2. High-Value Customers Becoming Inactive
     if (segmentCounts.AT_RISK > 0) {
-      insights.push({
-        id: "at-risk-customers",
-        type: "warning",
-        badge: "⚠️ Retention Alert",
-        title: `${segmentCounts.AT_RISK} High-Value Customers Going Dormant`,
-        what: `${segmentCounts.AT_RISK} regular customers haven't placed an order in over 30 days.`,
-        why: "Dormant customers churn permanently if not re-engaged within 45–60 days.",
-        action: "Send a targeted 'We miss you' combo voucher to reactivate them before they churn.",
+      ownerAlerts.push({
+        id: "alert-at-risk-custs",
+        priority: "HIGH",
+        badge: "⚠️ Retention Risk",
+        issue: `${segmentCounts.AT_RISK} High-Value Customers Inactive (>30 Days)`,
+        cause: "Previously frequent or high-spending diners have not placed an order in over 30 days.",
+        financialImpact: `Up to ₹${Math.round(atRiskSpendTotal).toLocaleString()} in customer lifetime value at risk of permanent churn.`,
+        recommendedAction: "Send automated 'We miss you' WhatsApp voucher before 60-day permanent churn threshold.",
         actionLink: "/customers/offers",
       })
     }
 
-    // 4. Star Product Contribution
-    if (topProductsByRevenue.length > 0 && topProductsByRevenue[0].revenue > 0) {
-      const topProd = topProductsByRevenue[0]
-      insights.push({
-        id: "top-star-product",
-        type: "info",
-        badge: "⭐ Anchor Item",
-        title: `"${topProd.name}" Drives Revenue`,
-        what: `"${topProd.name}" generated ₹${topProd.revenue.toLocaleString()} (${topProd.contribution}% of total food sales).`,
-        why: "This is your hero menu item that brings customers in the door.",
-        action: "Create bundled combos pairing this item with high-margin drinks or sides.",
-        actionLink: "/menu",
-      })
-    }
-
-    // 5. Significant Product Sales Decline
+    // 3. Popular Product Declining
     if (productGrowthComparison.decliners.length > 0) {
-      const decliner = productGrowthComparison.decliners[0]
-      if (decliner.growth !== null && decliner.growth < -20) {
-        insights.push({
-          id: "product-decliner",
-          type: "warning",
-          badge: "📉 Sales Drop",
-          title: `"${decliner.name}" Sales Dropped ${decliner.growth}%`,
-          what: `Sales dropped from prior period levels down to ₹${decliner.revenue.toLocaleString()}.`,
-          why: "Could be caused by quality inconsistency, uncompetitive pricing, or poor menu visibility.",
-          action: "Check customer reviews and verify kitchen preparation quality.",
+      const topDecliner = productGrowthComparison.decliners[0]
+      if (topDecliner.growth !== null && topDecliner.growth < -20) {
+        const estLoss = Math.round(topDecliner.revenue * (Math.abs(topDecliner.growth) / 100))
+        ownerAlerts.push({
+          id: "alert-product-declining",
+          priority: "MEDIUM",
+          badge: "📉 Dish Decline",
+          issue: `Popular Dish "${topDecliner.name}" Sales Dropped ${topDecliner.growth}%`,
+          cause: "Order frequency for this dish slowed significantly compared to the prior period.",
+          financialImpact: `~₹${estLoss.toLocaleString()} lost sales on this specific item.`,
+          recommendedAction: "Verify preparation quality with the kitchen team or feature on social media.",
+          actionLink: "/menu",
         })
       }
     }
 
-    // 6. Recipe Variance / Over-portioning Alert
-    const highVarianceItem = consumptionVariance.find((v) => v.variancePercent !== null && v.variancePercent > 10)
-    if (highVarianceItem) {
-      insights.push({
-        id: "recipe-variance-alert",
-        type: "warning",
-        badge: "🥫 Portions Alert",
-        title: `Kitchen Over-Portioning Detected on "${highVarianceItem.name}"`,
-        what: `Actual kitchen consumption was +${highVarianceItem.variancePercent}% higher than standard recipe expectation (+${highVarianceItem.variance} ${highVarianceItem.unit}).`,
-        why: "Unrecorded spills, generous portioning, or staff snacking directly inflate your food costs.",
-        action: "Audit chef portion control and inspect measurement scoops in the kitchen.",
+    // 4. Critical Ingredient Stockout Imminent
+    if (ingredientProductImpact.length > 0) {
+      const urgentItem = ingredientProductImpact[0]
+      ownerAlerts.push({
+        id: "alert-stockout-risk",
+        priority: "HIGH",
+        badge: "🥫 Stockout Risk",
+        issue: `Critical Stockout Imminent: "${urgentItem.name}"`,
+        cause: `Current stock of ${urgentItem.currentStock} ${urgentItem.unit} covers only ~${urgentItem.daysRemaining ?? "few"} days.`,
+        financialImpact: `Disrupts ${urgentItem.dishesCount} menu items, placing ₹${urgentItem.salesAtRisk.toLocaleString()} in potential dish sales at risk.`,
+        recommendedAction: `Reorder approximately ${urgentItem.suggestedReorder || urgentItem.reorderLevel} ${urgentItem.unit} immediately.`,
         actionLink: "/inventory",
       })
     }
 
-    // 7. Highest Waste Ingredient
+    // 5. Abnormally High Kitchen Waste
     if (wasteByIngredient.length > 0 && wasteByIngredient[0].cost > 0) {
       const highestWaste = wasteByIngredient[0]
-      insights.push({
-        id: "high-waste-alert",
-        type: "warning",
+      ownerAlerts.push({
+        id: "alert-high-waste",
+        priority: highestWaste.cost > 1000 ? "HIGH" : "MEDIUM",
         badge: "🗑️ Waste Cost",
-        title: `"${highestWaste.name}" Incurred Highest Waste`,
-        what: `₹${highestWaste.cost.toLocaleString()} worth of "${highestWaste.name}" (${highestWaste.quantity} ${highestWaste.unit}) was recorded as waste.`,
-        why: "Wastage directly erodes your gross profit margin.",
-        action: "Order in smaller, more frequent batches to preserve freshness and reduce spoilage.",
+        issue: `Abnormally High Waste on "${highestWaste.name}" (₹${highestWaste.cost.toLocaleString()})`,
+        cause: `${highestWaste.quantity} ${highestWaste.unit} was recorded as kitchen waste in this period.`,
+        financialImpact: `Direct profit margin reduction of ₹${highestWaste.cost.toLocaleString()}.`,
+        recommendedAction: "Audit kitchen prep batch sizes and inspect cold-storage refrigeration temperatures.",
         actionLink: "/inventory",
       })
     }
 
-    // 8. Stockout Risk Alert
-    if (stockoutApproaching.length > 0) {
-      const urgentItem = stockoutApproaching[0]
-      insights.push({
-        id: "stockout-alert",
-        type: "warning",
-        badge: "⚠️ Low Stock",
-        title: `"${urgentItem.name}" Approaching Stockout`,
-        what: `Only ${urgentItem.currentStock} ${urgentItem.unit} remaining (${urgentItem.daysRemaining !== null ? `~${urgentItem.daysRemaining} days` : "low stock"}).`,
-        why: "Running out of ingredients forces you to 86 popular menu items, losing sales and frustrating diners.",
-        action: `Reorder approximately ${urgentItem.suggestedReorder || urgentItem.reorderLevel} ${urgentItem.unit} immediately.`,
-        actionLink: "/inventory",
+    // 6. High-Margin Product With Weak Sales (Opportunity)
+    const opportunityProduct = productsWithMatrix.find((p) => p.quadrant === "PUZZLE" && p.grossMarginPercent !== null && p.grossMarginPercent >= 65)
+    if (opportunityProduct) {
+      ownerAlerts.push({
+        id: "alert-high-margin-opportunity",
+        priority: "MEDIUM",
+        badge: "💡 Profit Opportunity",
+        issue: `High-Margin Dish "${opportunityProduct.name}" Has Weak Sales`,
+        cause: `Only ${opportunityProduct.unitsSold} units sold despite an exceptional ${opportunityProduct.grossMarginPercent}% gross margin.`,
+        financialImpact: "Missed high-margin revenue contribution that could substantially expand net profits.",
+        recommendedAction: "Feature as 'Chef's Special' on WhatsApp catalog and train staff to suggest it as an add-on.",
+        actionLink: "/menu",
+      })
+    }
+
+    // 7. Low-Margin Product Consuming Significant Stock (Cash Cow Optimization)
+    const thinMarginCow = productsWithMatrix.find((p) => p.quadrant === "CASH_COW" && p.grossMarginPercent !== null && p.grossMarginPercent < 45)
+    if (thinMarginCow) {
+      ownerAlerts.push({
+        id: "alert-low-margin-high-volume",
+        priority: "MEDIUM",
+        badge: "⚖️ Margin Squeeze",
+        issue: `Volume Leader "${thinMarginCow.name}" Operates on Low Margin (${thinMarginCow.grossMarginPercent}%)`,
+        cause: `Generates high order volume (${thinMarginCow.unitsSold} units sold) but recipe food costs absorb most revenue.`,
+        financialImpact: "Kitchen workload is high with minimal net retained profit per serving.",
+        recommendedAction: "Optimize portion weight by 5-10% or adjust price by ₹10-20 to improve gross margin.",
+        actionLink: "/menu",
       })
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 7. RETURN STRUCTURED UNIFIED BUSINESS INTELLIGENCE
+    // 8. UNIFIED BI RESPONSE PAYLOAD
     // ─────────────────────────────────────────────────────────────
     return NextResponse.json({
       period: {
@@ -1275,39 +1757,85 @@ export async function GET(request: Request) {
         daysInPeriod,
       },
 
-      // Executive Business Insights
-      insights,
+      // Owner Alerts / Business Insights (Strict Issue -> Cause -> Impact -> Action -> Priority)
+      ownerAlerts,
 
-      // High-level Overview KPIs
-      kpis: {
-        revenue: { value: Math.round(currentRevenue), prev: Math.round(prevRevenue), growth: revenueGrowth },
+      // 1. OWNER EXECUTIVE OVERVIEW
+      overview: {
+        grossSales: { value: Math.round(grossSalesCurrent), prev: Math.round(grossSalesPrev), growth: grossSalesGrowth },
+        netSales: { value: Math.round(netSalesCurrent), prev: Math.round(netSalesPrev), growth: netSalesGrowth },
         totalOrders: { value: currentOrderCount, prev: prevOrderCount, growth: orderCountGrowth },
         aov: { value: parseFloat(currentAOV.toFixed(2)), prev: parseFloat(prevAOV.toFixed(2)), growth: aovGrowth },
-        totalUnitsSold: { value: totalUnitsSold, prev: prevUnitsSold, growth: unitsSoldGrowth },
-        activeCustomers: { value: totalActiveCustomers, prev: prevActiveCustomers, growth: customerGrowth },
+        uniqueCustomers: { value: totalActiveCustomers, prev: prevActiveCustomers, growth: customerGrowth },
         newCustomers: { value: newCustomersCount },
-        returningCustomers: { value: returningCustomersCount },
-        repeatCustomerRate: { value: parseFloat(repeatCustomerRate.toFixed(1)) },
-        customerRetentionRate: { value: customerRetentionRate !== null ? parseFloat(customerRetentionRate.toFixed(1)) : null },
+        repeatCustomers: { value: returningCustomersCount },
+        repeatCustomerRate: { value: repeatCustomerRate },
+        grossProfit: { value: currentGrossProfit, prev: prevGrossProfit, growth: grossProfitGrowth },
+        contributionMargin: { value: currentContributionMargin },
+        foodCostPercent: { value: currentFoodCostPercent },
+        inventoryValuation: { value: Math.round(totalInventoryValuation) },
+        wasteCost: { value: Math.round(stockWastedCost), prev: Math.round(prevWastedCost), growth: wastedCostGrowth },
+        wastePercent: { value: wastePercent },
+        stockoutLostSales: { value: null, label: "N/A", note: "Stockout loss tracking not configured in POS" },
+        whatsAppOrders: { value: whatsAppOrdersCount, prev: whatsAppOrdersPrev.length, growth: whatsAppOrdersGrowth },
+        whatsAppConversionRate: { value: whatsAppConversionRate },
+        salesVsTarget: { value: null, label: "N/A", note: "No target configured in settings" },
+        todayVsYesterday: {
+          todaySales: Math.round(todaySales),
+          yesterdaySales: Math.round(yesterdaySales),
+          salesGrowth: todaySalesGrowth,
+          todayOrders: todayOrderCount,
+          yesterdayOrders: yesterdayOrderCount,
+          ordersGrowth: todayOrdersGrowth,
+          todayAov: todayAOV,
+          yesterdayAov: yesterdayAOV,
+          aovGrowth: todayAovGrowth,
+        },
         cancelledOrders: { value: totalCancelledOrRejected, rate: allOrdersInPeriod.length > 0 ? parseFloat(((totalCancelledOrRejected / allOrdersInPeriod.length) * 100).toFixed(1)) : 0 },
         lostRevenue: { value: Math.round(lostRevenue) },
       },
 
-      // Section 1: Customers
+      // 2. CUSTOMER ANALYTICS
       customers: {
         totalActiveCustomers,
         newCustomersCount,
         returningCustomersCount,
-        repeatCustomerRate: parseFloat(repeatCustomerRate.toFixed(1)),
-        customerRetentionRate: customerRetentionRate !== null ? parseFloat(customerRetentionRate.toFixed(1)) : null,
+        repeatCustomerRate,
+        customerRetentionRate,
+        orderFrequency,
+        avgItemsPerOrder,
         aov: parseFloat(currentAOV.toFixed(2)),
-        revenuePerCustomer: parseFloat(revenuePerCustomer.toFixed(2)),
-        ordersPerCustomer: parseFloat(ordersPerCustomer.toFixed(2)),
-        totalCustomerRevenue: Math.round(currentRevenue),
-        avgCustomerLtv: Math.round(avgCustomerLtv),
+        revenuePerCustomer,
+        ordersPerCustomer,
+        totalCustomerRevenue: Math.round(grossSalesCurrent),
+        avgCustomerLtv,
+        churnRate: customerChurnRate,
+        reactivatedCustomers: reactivatedCustomersCount,
+        dormantCustomers: dormantCustomersCount,
+        avgReorderGapDays,
+        timeBasedRetention: {
+          firstTimeCustomers: newCustomersCount,
+          secondOrderConversionRate,
+          thirdOrderConversionRate,
+          repeatRate7Days,
+          repeatRate30Days,
+          repeatRate60Days,
+          repeatRate90Days,
+          avgDaysFirstToSecond,
+        },
+        orderFunnel,
+        reorderGapDistribution,
+        preferences: {
+          favouriteDish,
+          favouriteCategory,
+          vegPreference,
+          preferredOrderType: ordersByOrderType[0] || null,
+          preferredDay: [...dayOfWeekStats].sort((a, b) => b.orders - a.orders)[0]?.day || "N/A",
+          peakHourText,
+        },
         growth: {
           activeCustomers: customerGrowth,
-          revenue: revenueGrowth,
+          revenue: grossSalesGrowth,
           orders: orderCountGrowth,
           aov: aovGrowth,
         },
@@ -1321,17 +1849,18 @@ export async function GET(request: Request) {
         loyaltyComparison,
         segments: segmentCounts,
         topCustomers,
+        customerActionTable,
         cohortRetention,
       },
 
-      // Section 2: Products
+      // 3. PRODUCT / MENU ANALYTICS
       products: {
         totalUnitsSold,
-        totalRevenue: Math.round(currentRevenue),
-        averageSellingPrice: totalUnitsSold > 0 ? parseFloat((currentRevenue / totalUnitsSold).toFixed(2)) : 0,
+        totalRevenue: Math.round(grossSalesCurrent),
+        averageSellingPrice: totalUnitsSold > 0 ? parseFloat((grossSalesCurrent / totalUnitsSold).toFixed(2)) : 0,
         growth: {
           unitsSold: unitsSoldGrowth,
-          revenue: revenueGrowth,
+          revenue: grossSalesGrowth,
         },
         trends: productTrends,
         topByRevenue: topProductsByRevenue,
@@ -1340,13 +1869,24 @@ export async function GET(request: Request) {
         growthComparison: productGrowthComparison,
         performanceMatrix: productsWithMatrix,
         frequentlyBoughtTogether,
-        variants: variantsData,
-        addons: addonsData,
+        productActionTable,
+        variants: {
+          available: false,
+          count: allMenuItems.reduce((s, m) => s + (m.variants?.length || 0), 0),
+          message: "No item variants configured in Menu",
+        },
+        addons: {
+          available: false,
+          count: allMenuItems.reduce((s, m) => s + (m.addons?.length || 0), 0),
+          message: "No add-ons configured in Menu",
+          attachRate: 0,
+        },
       },
 
-      // Section 3: Inventory & Waste
+      // 4. INVENTORY & WASTE ANALYTICS
       inventory: {
         valuation: Math.round(totalInventoryValuation),
+        openingValuation: Math.round(openingInventoryValuation),
         totalItemsCount: allInventoryItems.length,
         lowStockCount: lowStockItems.length,
         outOfStockCount: outOfStockItems.length,
@@ -1360,9 +1900,19 @@ export async function GET(request: Request) {
         wastedCost: Math.round(stockWastedCost),
         wastedCostGrowth,
         wastePercent,
+        inventoryTurnover,
+        daysOfStockCover: reorderAnalysis.filter((r) => r.daysRemaining !== null).length > 0
+          ? parseFloat((reorderAnalysis.reduce((s, r) => s + (r.daysRemaining || 0), 0) / Math.max(1, reorderAnalysis.filter((r) => r.daysRemaining !== null).length)).toFixed(1))
+          : null,
+        stockoutRate,
+        gmroi,
+        expiryRisk: { value: null, label: "N/A", note: "Expiry dates not tracked in inventory schema" },
+        purchasePriceVariance: { value: null, label: "N/A", note: "Baseline PO pricing not tracked in schema" },
         consumptionVariance,
         stockoutApproaching,
         reorderAnalysis,
+        ingredientProductImpact,
+        inventoryActionTable,
         wasteByIngredient,
         wasteByReason,
         consumptionTrend: inventoryConsumptionTrend,

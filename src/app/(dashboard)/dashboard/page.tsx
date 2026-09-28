@@ -3,7 +3,6 @@
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import OrderDrawer from "@/components/OrderDrawer"
-import StatusBadge from "@/components/StatusBadge"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
 import {
@@ -38,7 +37,7 @@ ChartJS.register(
 // REUSABLE HELPER UI COMPONENTS
 // ─────────────────────────────────────────────────────────────
 
-// Growth indicator badge (Strictly handles null as N/A, never Infinity/100%)
+// Growth indicator badge (Strictly handles null/NaN/0-prior as N/A, never Infinity or 100%)
 function GrowthBadge({ value }: { value: number | null | undefined }) {
   if (value === null || value === undefined || isNaN(value)) {
     return (
@@ -93,7 +92,7 @@ function FormulaInfo({
         }}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
-        className="w-4 h-4 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 inline-flex items-center justify-center text-[10px] font-bold border border-slate-300 transition-colors"
+        className="w-3.5 h-3.5 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 inline-flex items-center justify-center text-[10px] font-bold border border-slate-300 transition-colors"
         title="Formula & Explanation"
       >
         i
@@ -124,6 +123,7 @@ function MetricCard({
   icon,
   prefix = "",
   suffix = "",
+  subtitle,
 }: {
   title: string
   value: string | number
@@ -134,28 +134,32 @@ function MetricCard({
   icon?: string
   prefix?: string
   suffix?: string
+  subtitle?: string
 }) {
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-4.5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between">
-      <div className="flex items-center justify-between text-slate-500 mb-2">
-        <div className="flex items-center text-xs font-medium text-slate-600">
-          {icon && <span className="mr-1.5 text-sm">{icon}</span>}
-          <span>{title}</span>
-          {formula && <FormulaInfo title={title} formula={formula} explanation={explanation} />}
+    <div className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between">
+      <div>
+        <div className="flex items-center justify-between text-slate-500 mb-1.5">
+          <div className="flex items-center text-xs font-medium text-slate-600">
+            {icon && <span className="mr-1.5 text-sm">{icon}</span>}
+            <span>{title}</span>
+            {formula && <FormulaInfo title={title} formula={formula} explanation={explanation} />}
+          </div>
+          {growth !== undefined && <GrowthBadge value={growth} />}
         </div>
-        {growth !== undefined && <GrowthBadge value={growth} />}
-      </div>
 
-      <div className="flex items-baseline justify-between mt-1">
-        <div className="text-2xl font-bold text-slate-900 tracking-tight">
-          {prefix}
-          {typeof value === "number" ? value.toLocaleString() : value}
-          {suffix}
+        <div className="flex items-baseline justify-between mt-1">
+          <div className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+            {prefix}
+            {typeof value === "number" ? value.toLocaleString() : value}
+            {suffix}
+          </div>
         </div>
+        {subtitle && <p className="text-[11px] text-slate-400 mt-0.5">{subtitle}</p>}
       </div>
 
       {prevValue !== undefined && prevValue !== null && (
-        <div className="text-[11px] text-slate-400 mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
+        <div className="text-[11px] text-slate-400 mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
           <span>Prior Period:</span>
           <span className="font-medium text-slate-600">
             {prefix}
@@ -180,19 +184,22 @@ export default function AnalyticsDashboard() {
   )
   const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0])
 
-  // Active Section Tab (1. CUSTOMERS, 2. PRODUCTS, 3. INVENTORY & WASTE)
-  const [activeSection, setActiveSection] = useState<"customers" | "products" | "inventory">("customers")
+  // Active Section Tab: 0. OVERVIEW, 1. CUSTOMERS, 2. PRODUCTS, 3. INVENTORY & WASTE
+  const [activeSection, setActiveSection] = useState<"overview" | "customers" | "products" | "inventory">("overview")
 
   // API Data State
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
 
-  // Search & Filter States for tables
+  // Search & Filter States for Action Tables
   const [customerSearch, setCustomerSearch] = useState("")
+  const [customerSegmentFilter, setCustomerSegmentFilter] = useState("ALL")
   const [productSearch, setProductSearch] = useState("")
   const [productCategoryFilter, setProductCategoryFilter] = useState("ALL")
   const [productSortBy, setProductSortBy] = useState<"revenue" | "units" | "growth" | "margin">("revenue")
+  const [inventorySearch, setInventorySearch] = useState("")
+  const [inventoryStatusFilter, setInventoryStatusFilter] = useState("ALL")
 
   // Fetch unified Analytics API
   const fetchAnalytics = async () => {
@@ -218,6 +225,22 @@ export default function AnalyticsDashboard() {
     fetchAnalytics()
   }, [range, startDate, endDate])
 
+  // OrderDrawer Status Update Handler
+  const handleStatusUpdate = async (orderId: string, newStatus: string, reason?: string) => {
+    try {
+      const res = await fetch(`/api/orders/${orderId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus, reason }),
+      })
+      if (res.ok) {
+        fetchAnalytics()
+      }
+    } catch (err) {
+      console.error("Failed to update status", err)
+    }
+  }
+
   // PDF Export
   const generatePDFReport = () => {
     if (!data) return
@@ -232,20 +255,22 @@ export default function AnalyticsDashboard() {
     doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 26)
     doc.text(`Period: ${range} (${data.period?.startDate?.slice(0, 10)} to ${data.period?.endDate?.slice(0, 10)})`, 14, 31)
 
-    // Executive KPIs
     doc.setFontSize(12)
     doc.setTextColor(17, 24, 39)
-    doc.text("Executive Performance Summary", 14, 40)
+    doc.text("Owner Executive Overview", 14, 40)
 
     const summaryRows = [
-      ["Total Food Revenue", `Rs. ${data.kpis?.revenue?.value?.toLocaleString() || 0}`],
-      ["Total Valid Orders", `${data.kpis?.totalOrders?.value || 0}`],
-      ["Average Order Value (AOV)", `Rs. ${data.kpis?.aov?.value?.toFixed(2) || 0}`],
+      ["Gross Sales", `Rs. ${data.overview?.grossSales?.value?.toLocaleString() || 0}`],
+      ["Net Sales", `Rs. ${data.overview?.netSales?.value?.toLocaleString() || 0}`],
+      ["Total Valid Orders", `${data.overview?.totalOrders?.value || 0}`],
+      ["Average Order Value (AOV)", `Rs. ${data.overview?.aov?.value?.toFixed(2) || 0}`],
       ["Active Diners", `${data.customers?.totalActiveCustomers || 0}`],
       ["New Diners", `${data.customers?.newCustomersCount || 0}`],
       ["Returning Diners", `${data.customers?.returningCustomersCount || 0}`],
       ["Repeat Customer Rate", `${data.customers?.repeatCustomerRate || 0}%`],
-      ["Total Units Sold", `${data.products?.totalUnitsSold || 0}`],
+      ["Gross Profit (Recipe)", data.overview?.grossProfit?.value !== null ? `Rs. ${data.overview?.grossProfit?.value?.toLocaleString()}` : "Cost data unavailable"],
+      ["Contribution Margin", data.overview?.contributionMargin?.value !== null ? `${data.overview?.contributionMargin?.value}%` : "Cost data unavailable"],
+      ["Food Cost %", data.overview?.foodCostPercent?.value !== null ? `${data.overview?.foodCostPercent?.value}%` : "Cost data unavailable"],
       ["Current Inventory Value", `Rs. ${data.inventory?.valuation?.toLocaleString() || 0}`],
       ["Total Recorded Waste", `Rs. ${data.inventory?.wastedCost?.toLocaleString() || 0}`],
     ]
@@ -257,9 +282,8 @@ export default function AnalyticsDashboard() {
       headStyles: { fillColor: [79, 70, 229] },
     })
 
-    const finalY = (doc as any).lastAutoTable?.finalY || 100
+    const finalY = (doc as any).lastAutoTable?.finalY || 110
 
-    // Top Selling Products
     doc.setFontSize(12)
     doc.text("Top Selling Menu Items", 14, finalY + 12)
 
@@ -279,7 +303,7 @@ export default function AnalyticsDashboard() {
       headStyles: { fillColor: [16, 185, 129] },
     })
 
-    doc.save(`Restaurant-BI-Report-${new Date().toISOString().split("T")[0]}.pdf`)
+    doc.save(`Restaurant-Owner-BI-Report-${new Date().toISOString().split("T")[0]}.pdf`)
   }
 
   const handleExcelExport = () => {
@@ -287,48 +311,65 @@ export default function AnalyticsDashboard() {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // FILTERED PRODUCT LIST FOR TABLE
+  // FILTERED TABLES DATA
   // ─────────────────────────────────────────────────────────────
-  const filteredProducts = useMemo(() => {
-    if (!data?.products?.performanceMatrix) return []
-    let list = [...data.products.performanceMatrix]
+  // Filtered Customer Action Table
+  const filteredCustomerTable = useMemo(() => {
+    if (!data?.customers?.customerActionTable) return []
+    let list = [...data.customers.customerActionTable]
+    if (customerSearch.trim()) {
+      const q = customerSearch.toLowerCase()
+      list = list.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.phone && c.phone.includes(q)) ||
+          c.favouriteDish?.toLowerCase().includes(q)
+      )
+    }
+    if (customerSegmentFilter !== "ALL") {
+      list = list.filter((c) => c.segment === customerSegmentFilter)
+    }
+    return list
+  }, [data, customerSearch, customerSegmentFilter])
 
+  // Filtered Product Action Table
+  const filteredProductTable = useMemo(() => {
+    if (!data?.products?.productActionTable) return []
+    let list = [...data.products.productActionTable]
     if (productSearch.trim()) {
       const q = productSearch.toLowerCase()
       list = list.filter(
         (p) =>
           p.name.toLowerCase().includes(q) ||
-          p.categoryName.toLowerCase().includes(q)
+          p.category.toLowerCase().includes(q)
       )
     }
-
     if (productCategoryFilter !== "ALL") {
-      list = list.filter((p) => p.categoryName === productCategoryFilter)
+      list = list.filter((p) => p.category === productCategoryFilter)
     }
-
     list.sort((a, b) => {
       if (productSortBy === "revenue") return b.revenue - a.revenue
       if (productSortBy === "units") return b.unitsSold - a.unitsSold
-      if (productSortBy === "growth") return (b.growth ?? -999) - (a.growth ?? -999)
       if (productSortBy === "margin") return (b.grossMarginPercent ?? -999) - (a.grossMarginPercent ?? -999)
+      if (productSortBy === "growth") return (b.repeatPurchaseRate ?? -999) - (a.repeatPurchaseRate ?? -999)
       return 0
     })
-
     return list
   }, [data, productSearch, productCategoryFilter, productSortBy])
 
-  // Filtered Top Customers
-  const filteredCustomers = useMemo(() => {
-    if (!data?.customers?.topCustomers) return []
-    if (!customerSearch.trim()) return data.customers.topCustomers
-    const q = customerSearch.toLowerCase()
-    return data.customers.topCustomers.filter(
-      (c: any) =>
-        c.name.toLowerCase().includes(q) ||
-        (c.phone && c.phone.includes(q)) ||
-        c.segment.toLowerCase().includes(q)
-    )
-  }, [data, customerSearch])
+  // Filtered Inventory Action Table
+  const filteredInventoryTable = useMemo(() => {
+    if (!data?.inventory?.inventoryActionTable) return []
+    let list = [...data.inventory.inventoryActionTable]
+    if (inventorySearch.trim()) {
+      const q = inventorySearch.toLowerCase()
+      list = list.filter((i) => i.name.toLowerCase().includes(q))
+    }
+    if (inventoryStatusFilter !== "ALL") {
+      list = list.filter((i) => i.reorderStatus === inventoryStatusFilter)
+    }
+    return list
+  }, [data, inventorySearch, inventoryStatusFilter])
 
   // Loading Screen
   if (loading && !data) {
@@ -341,10 +382,8 @@ export default function AnalyticsDashboard() {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // CHART DATA PREPARATIONS
+  // CHART DATASETS
   // ─────────────────────────────────────────────────────────────
-
-  // Customer Growth Trend (Line Chart)
   const customerGrowthChartData = {
     labels: data?.customers?.growthTrend?.map((t: any) => t.label) || [],
     datasets: [
@@ -369,23 +408,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // New vs Returning Diners (Doughnut)
-  const newVsReturningChartData = {
-    labels: ["New Diners", "Returning Diners"],
-    datasets: [
-      {
-        data: [
-          data?.customers?.newCustomersCount || 0,
-          data?.customers?.returningCustomersCount || 0,
-        ],
-        backgroundColor: ["#10B981", "#6366F1"],
-        borderWidth: 2,
-        borderColor: "#ffffff",
-      },
-    ],
-  }
-
-  // Orders by Day of Week
   const dayOfWeekChartData = {
     labels: data?.customers?.dayOfWeekStats?.map((d: any) => d.shortDay) || [],
     datasets: [
@@ -405,12 +427,11 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Orders by Hour
   const hourlyChartData = {
     labels: data?.customers?.hourlyStats?.map((h: any) => h.label) || [],
     datasets: [
       {
-        label: "Orders Count",
+        label: "Orders",
         data: data?.customers?.hourlyStats?.map((h: any) => h.orders) || [],
         backgroundColor: "rgba(99, 102, 241, 0.85)",
         borderColor: "#4F46E5",
@@ -420,7 +441,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Orders by Source
   const sourceChartData = {
     labels: data?.customers?.ordersBySource?.map((s: any) => s.source) || [],
     datasets: [
@@ -433,7 +453,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Orders by Order Type
   const orderTypeChartData = {
     labels: data?.customers?.ordersByOrderType?.map((t: any) => t.label) || [],
     datasets: [
@@ -446,7 +465,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Product Revenue Trend (Line)
   const productTrendChartData = {
     labels: data?.products?.trends?.map((t: any) => t.label) || [],
     datasets: [
@@ -471,20 +489,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Top Products by Revenue
-  const topProductsChartData = {
-    labels: data?.products?.topByRevenue?.slice(0, 7).map((p: any) => p.name) || [],
-    datasets: [
-      {
-        label: "Revenue (₹)",
-        data: data?.products?.topByRevenue?.slice(0, 7).map((p: any) => p.revenue) || [],
-        backgroundColor: "#4F46E5",
-        borderRadius: 4,
-      },
-    ],
-  }
-
-  // Category Revenue Contribution
   const categoryChartData = {
     labels: data?.products?.categoryPerformance?.map((c: any) => c.category) || [],
     datasets: [
@@ -497,7 +501,18 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Waste by Ingredient
+  const reorderGapChartData = {
+    labels: data?.customers?.reorderGapDistribution?.map((g: any) => g.bucket) || [],
+    datasets: [
+      {
+        label: "Customers Count",
+        data: data?.customers?.reorderGapDistribution?.map((g: any) => g.count) || [],
+        backgroundColor: "#6366F1",
+        borderRadius: 4,
+      },
+    ],
+  }
+
   const wasteIngredientChartData = {
     labels: data?.inventory?.wasteByIngredient?.slice(0, 6).map((w: any) => w.name) || [],
     datasets: [
@@ -510,7 +525,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Waste by Reason
   const wasteReasonChartData = {
     labels: data?.inventory?.wasteByReason?.map((r: any) => r.reason) || [],
     datasets: [
@@ -523,7 +537,6 @@ export default function AnalyticsDashboard() {
     ],
   }
 
-  // Consumption Timeline
   const inventoryTimelineData = {
     labels: data?.inventory?.consumptionTrend?.map((t: any) => t.label) || [],
     datasets: [
@@ -555,11 +568,11 @@ export default function AnalyticsDashboard() {
           <div className="flex items-center gap-2.5">
             <span className="text-2xl">📊</span>
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Analytics & Business Intelligence
+              Restaurant Analytics & Reports
             </h1>
           </div>
           <p className="text-xs text-slate-500 font-normal mt-1">
-            Data-backed performance intelligence across Customers, Menu Products, and Inventory & Waste.
+            Executive Owner Overview, Customer Cohorts, Menu Product Margins, and Kitchen Stock Intelligence.
           </p>
         </div>
 
@@ -625,62 +638,74 @@ export default function AnalyticsDashboard() {
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
-          2. PROMINENT BUSINESS INSIGHTS (WHAT, WHY, ACTION)
+          2. OWNER ALERTS & BUSINESS INSIGHTS
+          (Issue -> Cause -> Financial Impact -> Recommended Action -> Priority)
       ───────────────────────────────────────────────────────────── */}
-      {data?.insights && data.insights.length > 0 && (
-        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5.5 shadow-md border border-indigo-900/40">
+      {data?.ownerAlerts && data.ownerAlerts.length > 0 && (
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 shadow-md border border-indigo-900/40">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2.5">
-              <span className="text-xl">🧠</span>
+              <span className="text-xl">🚨</span>
               <div>
                 <h2 className="text-base font-bold text-white tracking-tight">
-                  Business Insights & Recommendations
+                  Owner Alerts & Operational Insights
                 </h2>
                 <p className="text-[11px] text-slate-300">
-                  Factual, automated intelligence derived from your live orders and kitchen operations.
+                  Strictly data-backed operational observations with root causes and financial impact.
                 </p>
               </div>
             </div>
             <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 font-medium border border-indigo-500/30">
-              {data.insights.length} Actionable Observations
+              {data.ownerAlerts.length} Actionable Alerts
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {data.insights.map((ins: any) => (
+            {data.ownerAlerts.map((alert: any) => (
               <div
-                key={ins.id}
+                key={alert.id}
                 className="bg-slate-800/80 backdrop-blur-xs border border-slate-700/70 rounded-xl p-4 flex flex-col justify-between hover:border-indigo-400/50 transition-all"
               >
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-700 text-slate-200 uppercase tracking-wider">
-                      {ins.badge}
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+                        alert.priority === "HIGH"
+                          ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                          : alert.priority === "MEDIUM"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                          : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                      }`}
+                    >
+                      {alert.priority} PRIORITY
                     </span>
+                    <span className="text-[10px] font-medium text-slate-400">{alert.badge}</span>
                   </div>
-                  <h3 className="text-sm font-semibold text-white mb-1.5 leading-snug">
-                    {ins.title}
+
+                  <h3 className="text-sm font-semibold text-white mb-2 leading-snug">
+                    {alert.issue}
                   </h3>
+
                   <div className="space-y-1.5 text-xs">
-                    <p className="text-slate-200">
-                      <strong className="text-indigo-300 font-medium">What: </strong>
-                      {ins.what}
+                    <p className="text-slate-300">
+                      <strong className="text-indigo-300 font-medium">Cause: </strong>
+                      {alert.cause}
                     </p>
-                    <p className="text-slate-400 text-[11px] leading-relaxed">
-                      <strong className="text-slate-300 font-medium">Why it matters: </strong>
-                      {ins.why}
+                    <p className="text-rose-200 text-[11px]">
+                      <strong className="text-rose-300 font-medium">Financial Impact: </strong>
+                      {alert.financialImpact}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-3.5 pt-3 border-t border-slate-700/60 flex items-center justify-between">
+                <div className="mt-3 pt-3 border-t border-slate-700/60 flex items-center justify-between">
                   <div className="text-[11px] text-amber-300 font-medium flex items-center gap-1">
                     <span>💡</span>
-                    <span>{ins.action}</span>
+                    <span>{alert.recommendedAction}</span>
                   </div>
-                  {ins.actionLink && (
+                  {alert.actionLink && (
                     <Link
-                      href={ins.actionLink}
+                      href={alert.actionLink}
                       className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold underline shrink-0 ml-2"
                     >
                       Open →
@@ -697,16 +722,17 @@ export default function AnalyticsDashboard() {
           3. SECTION NAVIGATION TABS
       ───────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between border-b border-slate-200">
-        <div className="flex gap-2">
+        <div className="flex gap-1 sm:gap-2 overflow-x-auto">
           {[
+            { id: "overview", label: "Executive Overview", icon: "📊" },
             { id: "customers", label: "Customer Analytics", icon: "👥" },
-            { id: "products", label: "Product Analytics", icon: "🍽️" },
+            { id: "products", label: "Product & Menu", icon: "🍽️" },
             { id: "inventory", label: "Inventory & Waste", icon: "🥫" },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveSection(tab.id as any)}
-              className={`flex items-center gap-2 px-5 py-3 text-sm font-semibold border-b-2 transition-all ${
+              className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-all ${
                 activeSection === tab.id
                   ? "border-indigo-600 text-indigo-700 bg-indigo-50/50 rounded-t-lg"
                   : "border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300"
@@ -718,13 +744,288 @@ export default function AnalyticsDashboard() {
           ))}
         </div>
 
-        <div className="text-xs text-slate-500 font-medium hidden sm:block">
-          Comparing against previous equivalent {data?.period?.daysInPeriod || 30} days
+        <div className="text-xs text-slate-500 font-medium hidden md:block">
+          Comparing with prior equivalent {data?.period?.daysInPeriod || 30} days
         </div>
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
-          4. SECTION 1: CUSTOMER ANALYTICS
+          TAB 1: OWNER EXECUTIVE OVERVIEW
+      ───────────────────────────────────────────────────────────── */}
+      {activeSection === "overview" && (
+        <div className="space-y-6">
+          {/* Sub-Comparison: Today vs Yesterday */}
+          {data?.overview?.todayVsYesterday && (
+            <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4.5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">⚡</span>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Today vs Yesterday Live Performance
+                  </h3>
+                </div>
+                <span className="text-[11px] text-slate-400 font-medium">Real-time daily tracker</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                    <span>Today Sales</span>
+                    <GrowthBadge value={data.overview.todayVsYesterday.salesGrowth} />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900">
+                    ₹{data.overview.todayVsYesterday.todaySales.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    Yesterday: ₹{data.overview.todayVsYesterday.yesterdaySales.toLocaleString()}
+                  </div>
+                </div>
+
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                    <span>Today Orders</span>
+                    <GrowthBadge value={data.overview.todayVsYesterday.ordersGrowth} />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900">
+                    {data.overview.todayVsYesterday.todayOrders} Orders
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    Yesterday: {data.overview.todayVsYesterday.yesterdayOrders} orders
+                  </div>
+                </div>
+
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                    <span>Today AOV</span>
+                    <GrowthBadge value={data.overview.todayVsYesterday.aovGrowth} />
+                  </div>
+                  <div className="text-xl font-bold text-slate-900">
+                    ₹{data.overview.todayVsYesterday.todayAov.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    Yesterday: ₹{data.overview.todayVsYesterday.yesterdayAov.toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Master Owner KPI Grid */}
+          <div>
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+              Core Performance KPIs (Selected Period)
+            </h3>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <MetricCard
+                icon="💰"
+                title="Gross Sales"
+                value={data?.overview?.grossSales?.value || 0}
+                prevValue={data?.overview?.grossSales?.prev}
+                growth={data?.overview?.grossSales?.growth}
+                prefix="₹"
+                formula="SUM(valid order totals including delivery & taxes)"
+                explanation="Total cash inflow from all confirmed and delivered orders."
+              />
+              <MetricCard
+                icon="🏷️"
+                title="Net Sales"
+                value={data?.overview?.netSales?.value || 0}
+                prevValue={data?.overview?.netSales?.prev}
+                growth={data?.overview?.netSales?.growth}
+                prefix="₹"
+                formula="SUM(valid order subtotals)"
+                explanation="Pure food and beverage sales excluding delivery charges."
+              />
+              <MetricCard
+                icon="📦"
+                title="Total Orders"
+                value={data?.overview?.totalOrders?.value || 0}
+                prevValue={data?.overview?.totalOrders?.prev}
+                growth={data?.overview?.totalOrders?.growth}
+                formula="COUNT(valid orders in period)"
+                explanation="Excludes cancelled or rejected orders."
+              />
+              <MetricCard
+                icon="🎯"
+                title="Average Order Value"
+                value={data?.overview?.aov?.value || 0}
+                prevValue={data?.overview?.aov?.prev}
+                growth={data?.overview?.aov?.growth}
+                prefix="₹"
+                formula="Gross Sales / Valid Orders"
+                explanation="Average ticket spend per customer transaction."
+              />
+              <MetricCard
+                icon="👥"
+                title="Unique Diners"
+                value={data?.overview?.uniqueCustomers?.value || 0}
+                prevValue={data?.overview?.uniqueCustomers?.prev}
+                growth={data?.overview?.uniqueCustomers?.growth}
+                formula="COUNT(DISTINCT customer_id in period)"
+                explanation="Total distinct diners ordering in selected timeframe."
+              />
+              <MetricCard
+                icon="🆕"
+                title="New Diners"
+                value={data?.overview?.newCustomers?.value || 0}
+                formula="First order lifetime inside selected period"
+                explanation="First-time diners newly acquired in this window."
+              />
+              <MetricCard
+                icon="🔄"
+                title="Repeat Customer Rate"
+                value={`${data?.overview?.repeatCustomerRate?.value || 0}%`}
+                subtitle={`${data?.overview?.repeatCustomers?.value || 0} returning diners`}
+                formula="Returning Diners / Active Diners * 100"
+                explanation="Percentage of active diners who have ordered before."
+              />
+              <MetricCard
+                icon="📈"
+                title="Gross Profit (Recipe)"
+                value={data?.overview?.grossProfit?.value !== null && data?.overview?.grossProfit?.value !== undefined ? data.overview.grossProfit.value : "Cost data unavailable"}
+                prevValue={data?.overview?.grossProfit?.prev}
+                growth={data?.overview?.grossProfit?.growth}
+                prefix={data?.overview?.grossProfit?.value !== null ? "₹" : ""}
+                formula="Net Sales - SUM(Sold Units * Recipe Ingredient Costs)"
+                explanation="Calculated exclusively from menu items linked to kitchen recipes."
+              />
+              <MetricCard
+                icon="📊"
+                title="Contribution Margin"
+                value={data?.overview?.contributionMargin?.value !== null && data?.overview?.contributionMargin?.value !== undefined ? `${data.overview.contributionMargin.value}%` : "Cost data unavailable"}
+                formula="Gross Profit / Net Sales * 100"
+                explanation="Retained profit percentage after deducting ingredient costs."
+              />
+              <MetricCard
+                icon="🥘"
+                title="Food Cost % (COGS)"
+                value={data?.overview?.foodCostPercent?.value !== null && data?.overview?.foodCostPercent?.value !== undefined ? `${data.overview.foodCostPercent.value}%` : "Cost data unavailable"}
+                formula="Total Recipe Ingredient Cost / Net Sales * 100"
+                explanation="Portion of food sales consumed by kitchen raw materials."
+              />
+              <MetricCard
+                icon="🥫"
+                title="Inventory Valuation"
+                value={data?.overview?.inventoryValuation?.value || 0}
+                prefix="₹"
+                formula="SUM(Current Stock * Cost Per Unit)"
+                explanation="Total monetary capital currently tied up in physical pantry stock."
+              />
+              <MetricCard
+                icon="🗑️"
+                title="Waste Cost & %"
+                value={`₹${data?.overview?.wasteCost?.value?.toLocaleString() || 0}`}
+                subtitle={`Waste Rate: ${data?.overview?.wastePercent?.value || 0}%`}
+                formula="SUM(Wasted Quantity * Unit Cost)"
+                explanation="Recorded spoilage, kitchen errors, and prep wastage cost."
+              />
+              <MetricCard
+                icon="🚫"
+                title="Stockout Lost Sales"
+                value="N/A"
+                subtitle="Logging not configured in POS"
+                formula="Missed orders from 86'd items"
+                explanation="No stockout transaction event is currently tracked."
+              />
+              <MetricCard
+                icon="💬"
+                title="WhatsApp Orders"
+                value={data?.overview?.whatsAppOrders?.value || 0}
+                prevValue={data?.overview?.whatsAppOrders?.prev}
+                growth={data?.overview?.whatsAppOrders?.growth}
+                subtitle={data?.overview?.whatsAppConversionRate?.value !== null ? `${data.overview.whatsAppConversionRate.value}% Cart Conversion` : "N/A"}
+                formula="Orders where source = WHATSAPP"
+                explanation="Orders received directly through WhatsApp catalog automation."
+              />
+              <MetricCard
+                icon="🎯"
+                title="Sales vs Target"
+                value="N/A"
+                subtitle="No target configured"
+                formula="Actual Sales / Budgeted Target"
+                explanation="Configure target in restaurant settings to enable."
+              />
+              <MetricCard
+                icon="⚠️"
+                title="Cancelled / Lost"
+                value={data?.overview?.cancelledOrders?.value || 0}
+                subtitle={`₹${data?.overview?.lostRevenue?.value?.toLocaleString() || 0} lost revenue`}
+                formula="COUNT(CANCELLED + REJECTED orders)"
+                explanation="Orders rejected by kitchen or cancelled by customer."
+              />
+            </div>
+          </div>
+
+          {/* Revenue & Units Timeline Chart */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                  Revenue & Volume Sales Trend
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Daily progression of customer food revenue vs volume units prepared.
+                </p>
+              </div>
+            </div>
+            <div className="h-[280px]">
+              <Line
+                data={productTrendChartData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  scales: {
+                    y: {
+                      beginAtZero: true,
+                      ticks: { callback: (val) => `₹${val}` },
+                    },
+                    y1: {
+                      position: "right",
+                      beginAtZero: true,
+                      grid: { drawOnChartArea: false },
+                    },
+                  },
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Channel and Fulfillment Breakdowns */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Order Channels & Source
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Distribution across WhatsApp, POS In-Store, Web, and Phone orders.
+              </p>
+              <div className="h-[220px] flex items-center justify-center">
+                <Doughnut
+                  data={sourceChartData}
+                  options={{ responsive: true, maintainAspectRatio: false }}
+                />
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Order Fulfillment Types
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Comparison of Home Delivery, Takeaway counter pickups, and Dine-In.
+              </p>
+              <div className="h-[220px] flex items-center justify-center">
+                <Doughnut
+                  data={orderTypeChartData}
+                  options={{ responsive: true, maintainAspectRatio: false }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          TAB 2: CUSTOMER ANALYTICS & TIME-BASED RETENTION
       ───────────────────────────────────────────────────────────── */}
       {activeSection === "customers" && (
         <div className="space-y-6">
@@ -734,415 +1035,463 @@ export default function AnalyticsDashboard() {
               icon="👥"
               title="Active Customers"
               value={data?.customers?.totalActiveCustomers || 0}
-              prevValue={data?.kpis?.activeCustomers?.prev}
+              prevValue={data?.customers?.growth?.activeCustomers !== null ? data?.customers?.totalActiveCustomers : undefined}
               growth={data?.customers?.growth?.activeCustomers}
               formula="COUNT(DISTINCT customer_id in period)"
-              explanation="Unique diners who placed at least one completed/valid order during the selected date range."
-            />
-            <MetricCard
-              icon="🆕"
-              title="New vs Returning"
-              value={`${data?.customers?.newCustomersCount || 0} / ${data?.customers?.returningCustomersCount || 0}`}
-              formula="New = first order in period; Returning = ordered previously"
-              explanation="Breakdown of first-time diners acquired vs repeat diners ordering again."
+              explanation="Unique diners who placed at least one valid order during the date range."
             />
             <MetricCard
               icon="🔄"
-              title="Repeat Customer Rate"
+              title="Repeat Rate"
               value={`${data?.customers?.repeatCustomerRate || 0}%`}
-              formula="(Returning Customers / Active Customers) × 100"
-              explanation="Percentage of active diners in this period who have ordered before. Higher repeat rates indicate strong product satisfaction."
+              subtitle={`${data?.customers?.returningCustomersCount || 0} returning diners`}
+              formula="Returning Diners / Active Diners * 100"
+              explanation="Proportion of diners who have ordered previously."
             />
             <MetricCard
-              icon="🛡️"
-              title="Retention Rate"
-              value={data?.customers?.customerRetentionRate !== null ? `${data.customers.customerRetentionRate}%` : "N/A"}
-              formula="(Prior Period Customers Returning / Total Prior Period Customers) × 100"
-              explanation="Percentage of customers from the immediately preceding equivalent period who returned to order again in this period."
-            />
-          </div>
-
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <MetricCard
-              icon="💳"
-              title="Average Order Value"
-              value={data?.customers?.aov ? `₹${Math.round(data.customers.aov)}` : "₹0"}
-              prevValue={data?.kpis?.aov?.prev ? `₹${Math.round(data.kpis.aov.prev)}` : null}
-              growth={data?.customers?.growth?.aov}
-              formula="Valid Order Revenue / Valid Orders Count"
-              explanation="The average spend per completed order across all channels."
+              icon="⏱️"
+              title="Order Frequency"
+              value={`${data?.customers?.orderFrequency || 0}x`}
+              formula="Valid Orders / Active Diners"
+              explanation="Average number of completed orders placed per active diner."
             />
             <MetricCard
-              icon="💰"
-              title="Revenue Per Customer"
-              value={data?.customers?.revenuePerCustomer ? `₹${Math.round(data.customers.revenuePerCustomer)}` : "₹0"}
-              formula="Total Valid Revenue / Active Customers"
-              explanation="Average total revenue contributed per unique diner in the selected timeframe."
+              icon="🍽️"
+              title="Avg Items Per Order"
+              value={data?.customers?.avgItemsPerOrder || 0}
+              formula="Total Items Sold / Valid Orders"
+              explanation="Average basket depth per dining party."
             />
             <MetricCard
-              icon="📦"
-              title="Orders Per Customer"
-              value={data?.customers?.ordersPerCustomer ? data.customers.ordersPerCustomer.toFixed(1) : "0"}
-              formula="Total Valid Orders / Unique Active Customers"
-              explanation="Frequency of orders placed per active diner."
+              icon="💵"
+              title="Revenue Per Diner"
+              value={data?.customers?.revenuePerCustomer || 0}
+              prefix="₹"
+              formula="Gross Sales / Active Diners"
+              explanation="Average monetary contribution per diner in this period."
             />
             <MetricCard
               icon="💎"
-              title="Average Customer LTV"
-              value={data?.customers?.avgCustomerLtv ? `₹${data.customers.avgCustomerLtv.toLocaleString()}` : "₹0"}
-              formula="Average historical spend of active customers"
-              explanation="Total cumulative valid lifetime revenue generated by active diners since their very first order."
+              title="Average Diner LTV"
+              value={data?.customers?.avgCustomerLtv || 0}
+              prefix="₹"
+              formula="SUM(Lifetime spend of active diners) / Active Diners"
+              explanation="Historical lifetime gross revenue generated by diners."
+            />
+            <MetricCard
+              icon="⏳"
+              title="Avg Reorder Gap"
+              value={data?.customers?.avgReorderGapDays !== null ? `${data.customers.avgReorderGapDays} days` : "Single Order"}
+              formula="Average days elapsed between consecutive orders"
+              explanation="Typical cadence between repeat visits."
+            />
+            <MetricCard
+              icon="💔"
+              title="Customer Churn Rate"
+              value={`${data?.customers?.churnRate || 0}%`}
+              subtitle={`${data?.customers?.dormantCustomers || 0} dormant diners`}
+              formula="Dormant (>90d) / Total Historical Diners * 100"
+              explanation="Diners who have not reordered in more than 90 days."
             />
           </div>
 
-          {/* Charts Row 1: Growth Trend + New vs Returning */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Customer Activity & Growth Trend</h3>
-                  <p className="text-[11px] text-slate-500">Timeline of active and first-time diners over the selected period.</p>
+          {/* Time-Based Retention & Funnel */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                  Time-Based Retention & Conversion Funnel
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Measuring true cohort conversion: how quickly first-time buyers become loyal regulars.
+                </p>
+              </div>
+              <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                {data?.customers?.timeBasedRetention?.secondOrderConversionRate || 0}% 2nd Order Conversion
+              </span>
+            </div>
+
+            {/* Retention Milestones Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
+                <span className="text-[11px] font-semibold text-slate-500 block">7-Day Repeat Rate</span>
+                <span className="text-lg font-bold text-slate-900 mt-0.5 block">
+                  {data?.customers?.timeBasedRetention?.repeatRate7Days || 0}%
+                </span>
+                <span className="text-[10px] text-slate-400">Reordered within 1 week</span>
+              </div>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
+                <span className="text-[11px] font-semibold text-slate-500 block">30-Day Repeat Rate</span>
+                <span className="text-lg font-bold text-slate-900 mt-0.5 block">
+                  {data?.customers?.timeBasedRetention?.repeatRate30Days || 0}%
+                </span>
+                <span className="text-[10px] text-slate-400">Reordered within 1 month</span>
+              </div>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
+                <span className="text-[11px] font-semibold text-slate-500 block">60-Day Repeat Rate</span>
+                <span className="text-lg font-bold text-slate-900 mt-0.5 block">
+                  {data?.customers?.timeBasedRetention?.repeatRate60Days || 0}%
+                </span>
+                <span className="text-[10px] text-slate-400">Reordered within 2 months</span>
+              </div>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80">
+                <span className="text-[11px] font-semibold text-slate-500 block">Avg Time to 2nd Order</span>
+                <span className="text-lg font-bold text-slate-900 mt-0.5 block">
+                  {data?.customers?.timeBasedRetention?.avgDaysFirstToSecond !== null ? `${data.customers.timeBasedRetention.avgDaysFirstToSecond} days` : "N/A"}
+                </span>
+                <span className="text-[10px] text-slate-400">First to second gap</span>
+              </div>
+            </div>
+
+            {/* Visual Funnel Bar */}
+            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/80">
+              <span className="text-xs font-semibold text-slate-700 block mb-2">Lifetime Ordering Funnel</span>
+              <div className="space-y-2">
+                {data?.customers?.orderFunnel?.map((step: any, idx: number) => (
+                  <div key={idx} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs text-slate-600 font-medium">
+                      <span>{step.step}</span>
+                      <span>
+                        {step.count} Diners ({step.percent}%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-indigo-600 h-full rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.max(5, step.percent))}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Customer Preference Analytics Box */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+            <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+              Customer Dining Preferences
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Real ordering behavior preferences extracted from kitchen sales history.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <span className="text-xs font-semibold text-slate-500 block mb-1">Veg vs Non-Veg</span>
+                <div className="flex items-center justify-between text-xs mb-1.5 font-medium">
+                  <span className="text-emerald-700">🌱 Veg: {data?.customers?.preferences?.vegPreference?.vegPercent}%</span>
+                  <span className="text-rose-700">🍗 Non-Veg: {data?.customers?.preferences?.vegPreference?.nonVegPercent}%</span>
+                </div>
+                <div className="w-full bg-rose-200 h-2 rounded-full overflow-hidden flex">
+                  <div
+                    className="bg-emerald-500 h-full"
+                    style={{ width: `${data?.customers?.preferences?.vegPreference?.vegPercent || 50}%` }}
+                  />
+                  <div
+                    className="bg-rose-500 h-full"
+                    style={{ width: `${data?.customers?.preferences?.vegPreference?.nonVegPercent || 50}%` }}
+                  />
                 </div>
               </div>
-              <div className="h-64">
-                <Line
-                  data={customerGrowthChartData}
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <span className="text-xs font-semibold text-slate-500 block mb-1">Favourite Dish</span>
+                <div className="text-sm font-bold text-slate-900 truncate">
+                  {data?.customers?.preferences?.favouriteDish || "N/A"}
+                </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Most frequently ordered</span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <span className="text-xs font-semibold text-slate-500 block mb-1">Favourite Category</span>
+                <div className="text-sm font-bold text-slate-900 truncate">
+                  {data?.customers?.preferences?.favouriteCategory || "N/A"}
+                </div>
+                <span className="text-[11px] text-slate-400 mt-1 block">Highest order volume</span>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <span className="text-xs font-semibold text-slate-500 block mb-1">Peak Dining Times</span>
+                <div className="text-sm font-bold text-slate-900">
+                  {data?.customers?.preferences?.preferredDay || "Weekend"}
+                </div>
+                <span className="text-[11px] text-indigo-600 font-medium mt-1 block truncate">
+                  Peak: {data?.customers?.preferences?.peakHourText || "Evening"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Reorder Gap Distribution & Customer Growth Charts */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Reorder Gap Distribution
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Cadence of days between repeat orders from regular diners.
+              </p>
+              <div className="h-[240px]">
+                <Bar
+                  data={reorderGapChartData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: {
-                      y: { beginAtZero: true, grid: { color: "#F1F5F9" }, ticks: { stepSize: 1 } },
-                      x: { grid: { display: false } },
-                    },
-                    plugins: { legend: { position: "top" } },
+                    scales: { y: { beginAtZero: true } },
                   }}
                 />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">New vs Returning Mix</h3>
-                <p className="text-[11px] text-slate-500">Customer acquisition vs retention split.</p>
-                <div className="h-52 mt-2">
-                  <Doughnut
-                    data={newVsReturningChartData}
-                    options={{
-                      responsive: true,
-                      maintainAspectRatio: false,
-                      plugins: { legend: { position: "bottom" } },
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="pt-3 border-t border-slate-100 grid grid-cols-2 text-center text-xs">
-                <div>
-                  <span className="text-slate-400 block text-[10px]">New Diners</span>
-                  <span className="font-bold text-emerald-600 text-sm">{data?.customers?.newCustomersCount || 0}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Returning Diners</span>
-                  <span className="font-bold text-indigo-600 text-sm">{data?.customers?.returningCustomersCount || 0}</span>
-                </div>
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Active Diners Growth Timeline
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Total daily diners vs first-time customer acquisition.
+              </p>
+              <div className="h-[240px]">
+                <Line
+                  data={customerGrowthChartData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } },
+                  }}
+                />
               </div>
             </div>
           </div>
 
-          {/* Charts Row 2: Day of Week & Peak Hours */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Orders by Day of Week</h3>
-                  <p className="text-[11px] text-slate-500">Identify which days bring the heaviest customer traffic and revenue.</p>
-                </div>
-              </div>
-              <div className="h-60">
+          {/* Day of Week & Peak Hours */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Orders by Day of Week
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Find your slowest and busiest days to schedule prep and promotions.
+              </p>
+              <div className="h-[240px]">
                 <Bar
                   data={dayOfWeekChartData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                      y: { beginAtZero: true, grid: { color: "#F1F5F9" } },
-                      y1: { position: "right", beginAtZero: true, grid: { display: false } },
-                      x: { grid: { display: false } },
+                      y: { beginAtZero: true },
+                      y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false } },
                     },
-                    plugins: { legend: { position: "top" } },
                   }}
                 />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Orders by Hour of Day</h3>
-                  <p className="text-[11px] text-slate-500">Peak ordering windows to optimize kitchen staffing.</p>
-                </div>
-                <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-medium">
-                  Peak: {data?.customers?.peakHourText}
-                </span>
-              </div>
-              <div className="h-60">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Orders by Hour of Day
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Kitchen peak rush hours (0:00 to 23:00).
+              </p>
+              <div className="h-[240px]">
                 <Bar
                   data={hourlyChartData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
-                    scales: {
-                      y: { beginAtZero: true, grid: { color: "#F1F5F9" } },
-                      x: { grid: { display: false } },
-                    },
-                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } },
                   }}
                 />
               </div>
             </div>
           </div>
 
-          {/* Row 3: Order Source & Order Type Breakdown */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Orders by Channel / Source</h3>
-              <p className="text-[11px] text-slate-500 mb-3">WhatsApp Bot vs POS vs Website.</p>
-              <div className="h-48">
-                <Doughnut
-                  data={sourceChartData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { position: "bottom" } },
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Orders by Fulfillment Type</h3>
-              <p className="text-[11px] text-slate-500 mb-3">Home Delivery vs Takeaway vs Dining.</p>
-              <div className="h-48">
-                <Doughnut
-                  data={orderTypeChartData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { position: "bottom" } },
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Loyalty vs Non-Loyalty Comparison */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 mb-1">Loyalty Program Impact</h3>
-                <p className="text-[11px] text-slate-500 mb-3">Comparing diners engaged with loyalty points vs standard diners.</p>
-                <div className="space-y-3 mt-2">
-                  <div className="p-3 rounded-xl bg-indigo-50/70 border border-indigo-100 flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-semibold text-indigo-950 block">Loyalty Engaged Diners</span>
-                      <span className="text-[11px] text-slate-500">
-                        {data?.customers?.loyaltyComparison?.loyalty?.customers || 0} customers · {data?.customers?.loyaltyComparison?.loyalty?.orders || 0} orders
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-sm font-bold text-indigo-700 block">
-                        ₹{data?.customers?.loyaltyComparison?.loyalty?.aov?.toLocaleString() || 0}
-                      </span>
-                      <span className="text-[10px] text-slate-400">Avg Basket</span>
-                    </div>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-semibold text-slate-800 block">Standard Diners</span>
-                      <span className="text-[11px] text-slate-500">
-                        {data?.customers?.loyaltyComparison?.nonLoyalty?.customers || 0} customers · {data?.customers?.loyaltyComparison?.nonLoyalty?.orders || 0} orders
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-sm font-bold text-slate-700 block">
-                        ₹{data?.customers?.loyaltyComparison?.nonLoyalty?.aov?.toLocaleString() || 0}
-                      </span>
-                      <span className="text-[10px] text-slate-400">Avg Basket</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="text-[11px] text-slate-400 pt-2 border-t border-slate-100 mt-2">
-                Diners using loyalty points order with a higher average basket size.
-              </div>
-            </div>
-          </div>
-
-          {/* Customer RFM Segmentation & Cohort Retention */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Customer Segments */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold text-slate-900">RFM Customer Segments</h3>
-                <FormulaInfo
-                  title="RFM Segmentation"
-                  formula="Recency (days) + Frequency (orders) + Monetary (spend)"
-                  explanation="Automatically groups your entire diner base by loyalty and churn risk."
-                />
-              </div>
-
-              <div className="space-y-2">
-                {[
-                  { key: "HIGH_VALUE", label: "🌟 High Value Spenders", count: data?.customers?.segments?.HIGH_VALUE, color: "text-amber-700 bg-amber-50 border-amber-200" },
-                  { key: "LOYAL", label: "💎 Loyal Diners (5+ orders)", count: data?.customers?.segments?.LOYAL, color: "text-indigo-700 bg-indigo-50 border-indigo-200" },
-                  { key: "REGULAR", label: "🟢 Regulars (2-4 orders)", count: data?.customers?.segments?.REGULAR, color: "text-emerald-700 bg-emerald-50 border-emerald-200" },
-                  { key: "NEW", label: "🆕 New Diners (1 order)", count: data?.customers?.segments?.NEW, color: "text-blue-700 bg-blue-50 border-blue-200" },
-                  { key: "AT_RISK", label: "⚠️ At Risk (>30d inactive)", count: data?.customers?.segments?.AT_RISK, color: "text-rose-700 bg-rose-50 border-rose-200" },
-                  { key: "CHURNED", label: "💤 Churned (>60d inactive)", count: data?.customers?.segments?.CHURNED, color: "text-slate-700 bg-slate-100 border-slate-200" },
-                ].map((s) => (
-                  <div
-                    key={s.key}
-                    className={`flex items-center justify-between p-2.5 rounded-lg border text-xs ${s.color}`}
-                  >
-                    <span className="font-semibold">{s.label}</span>
-                    <span className="font-bold text-sm">{s.count || 0}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Customer Cohort Retention Table */}
-            <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Customer Cohort Retention Rate</h3>
-                  <p className="text-[11px] text-slate-500">Tracks how many acquired diners continue to order in subsequent months.</p>
-                </div>
-                <FormulaInfo
-                  title="Cohort Retention"
-                  formula="% of customers from acquisition month who re-ordered in Month N"
-                />
-              </div>
-
-              {data?.customers?.cohortRetention && data.customers.cohortRetention.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 font-semibold">
-                        <th className="py-2 px-3">Cohort Month</th>
-                        <th className="py-2 px-3">New Diners</th>
-                        <th className="py-2 px-3 text-center">Month 0</th>
-                        <th className="py-2 px-3 text-center">Month 1</th>
-                        <th className="py-2 px-3 text-center">Month 2</th>
-                        <th className="py-2 px-3 text-center">Month 3</th>
+          {/* Monthly Cohort Retention Table */}
+          {data?.customers?.cohortRetention && data.customers.cohortRetention.length > 0 && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Monthly Customer Cohort Retention
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Tracking how well new diners acquired in each month return over subsequent months.
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                    <tr>
+                      <th className="py-2.5 px-3">Cohort Month</th>
+                      <th className="py-2.5 px-3">New Diners</th>
+                      <th className="py-2.5 px-3">Month 0</th>
+                      <th className="py-2.5 px-3">Month 1</th>
+                      <th className="py-2.5 px-3">Month 2</th>
+                      <th className="py-2.5 px-3">Month 3</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {data.customers.cohortRetention.map((ch: any) => (
+                      <tr key={ch.cohortMonth} className="hover:bg-slate-50/50">
+                        <td className="py-2 px-3 font-semibold text-slate-900">{ch.cohortMonth}</td>
+                        <td className="py-2 px-3 text-slate-700">{ch.size}</td>
+                        <td className="py-2 px-3 font-medium text-emerald-600">{ch.m0}%</td>
+                        <td className="py-2 px-3">
+                          {ch.m1 !== null ? (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium">
+                              {ch.m1}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          {ch.m2 !== null ? (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+                              {ch.m2}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          {ch.m3 !== null ? (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-medium">
+                              {ch.m3}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {data.customers.cohortRetention.map((c: any) => (
-                        <tr key={c.cohortMonth} className="hover:bg-slate-50/50">
-                          <td className="py-2.5 px-3 font-semibold text-slate-800">{c.cohortMonth}</td>
-                          <td className="py-2.5 px-3 text-slate-600 font-medium">{c.size} diners</td>
-                          <td className="py-2.5 px-3 text-center font-bold text-emerald-700 bg-emerald-50/60 rounded">
-                            {c.m0}%
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            {c.m1 !== null ? (
-                              <span className={`px-2 py-0.5 rounded font-semibold ${c.m1 >= 25 ? "bg-indigo-50 text-indigo-700" : "text-slate-600"}`}>
-                                {c.m1}%
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">-</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            {c.m2 !== null ? (
-                              <span className={`px-2 py-0.5 rounded font-semibold ${c.m2 >= 20 ? "bg-indigo-50 text-indigo-700" : "text-slate-600"}`}>
-                                {c.m2}%
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">-</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            {c.m3 !== null ? (
-                              <span className={`px-2 py-0.5 rounded font-semibold ${c.m3 >= 15 ? "bg-indigo-50 text-indigo-700" : "text-slate-600"}`}>
-                                {c.m3}%
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="py-8 text-center text-xs text-slate-400">
-                  Not enough historical monthly cohorts recorded yet.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Top Customers Table */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Top Customers (Ranked by Revenue in Period)</h3>
-                <p className="text-[11px] text-slate-500">Your highest spending diners and their historical relationship.</p>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <input
-                type="text"
-                placeholder="Search diner by name or phone..."
-                value={customerSearch}
-                onChange={(e) => setCustomerSearch(e.target.value)}
-                className="text-xs px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-indigo-500 w-64"
-              />
+            </div>
+          )}
+
+          {/* ─────────────────────────────────────────────────────────
+              CUSTOMER ACTION TABLE (DECISION-ORIENTED)
+          ───────────────────────────────────────────────────────── */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                  Customer Decision & Action Table
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Targeted segments, churn risk ratings, and data-backed recommended actions.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Search diner name or phone..."
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 w-48 sm:w-56"
+                />
+                <select
+                  value={customerSegmentFilter}
+                  onChange={(e) => setCustomerSegmentFilter(e.target.value)}
+                  className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 text-slate-700 bg-white"
+                >
+                  <option value="ALL">All Segments</option>
+                  <option value="HIGH_VALUE">High Value</option>
+                  <option value="LOYAL">Loyal</option>
+                  <option value="REGULAR">Regular</option>
+                  <option value="NEW">New</option>
+                  <option value="AT_RISK">At Risk</option>
+                  <option value="CHURNED">Churned</option>
+                </select>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50/70">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
                     <th className="py-2.5 px-3">Customer</th>
                     <th className="py-2.5 px-3">Segment</th>
-                    <th className="py-2.5 px-3">Orders in Period</th>
-                    <th className="py-2.5 px-3">Period Revenue</th>
-                    <th className="py-2.5 px-3">Period AOV</th>
-                    <th className="py-2.5 px-3">Lifetime Spend</th>
+                    <th className="py-2.5 px-3">Period Rev</th>
+                    <th className="py-2.5 px-3">Orders</th>
                     <th className="py-2.5 px-3">Last Order</th>
+                    <th className="py-2.5 px-3">Reorder Gap</th>
+                    <th className="py-2.5 px-3">Churn Risk</th>
+                    <th className="py-2.5 px-3">Suggested Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredCustomers.map((c: any) => (
-                    <tr key={c.id} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-3">
-                        <span className="font-semibold text-slate-900 block">{c.name}</span>
-                        <span className="text-[11px] text-slate-400">{c.phone}</span>
+                  {filteredCustomerTable.slice(0, 20).map((c: any) => (
+                    <tr key={c.id} className="hover:bg-slate-50/60">
+                      <td className="py-2 px-3">
+                        <div className="font-semibold text-slate-900">{c.name}</div>
+                        <div className="text-[11px] text-slate-400">{c.phone || "No phone"}</div>
                       </td>
-                      <td className="py-3 px-3">
+                      <td className="py-2 px-3">
                         <span
-                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             c.segment === "HIGH_VALUE"
-                              ? "bg-amber-100 text-amber-800"
+                              ? "bg-purple-50 text-purple-700 border border-purple-200"
                               : c.segment === "LOYAL"
-                              ? "bg-indigo-100 text-indigo-800"
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : c.segment === "NEW"
+                              ? "bg-blue-50 text-blue-700 border border-blue-200"
                               : c.segment === "AT_RISK"
-                              ? "bg-rose-100 text-rose-800"
+                              ? "bg-amber-50 text-amber-700 border border-amber-200"
+                              : c.segment === "CHURNED"
+                              ? "bg-rose-50 text-rose-700 border border-rose-200"
                               : "bg-slate-100 text-slate-700"
                           }`}
                         >
                           {c.segment}
                         </span>
                       </td>
-                      <td className="py-3 px-3 font-medium text-slate-800">{c.orders} orders</td>
-                      <td className="py-3 px-3 font-bold text-slate-900">₹{c.revenue.toLocaleString()}</td>
-                      <td className="py-3 px-3 text-slate-700">₹{c.aov}</td>
-                      <td className="py-3 px-3 font-semibold text-indigo-700">₹{c.lifetimeSpend.toLocaleString()}</td>
-                      <td className="py-3 px-3 text-slate-500">
-                        {new Date(c.lastOrder).toLocaleDateString("en-IN")} ({c.daysSinceLast}d ago)
+                      <td className="py-2 px-3 font-semibold text-slate-900">
+                        ₹{c.periodRevenue.toLocaleString()}
+                        <div className="text-[10px] text-slate-400 font-normal">
+                          Lifetime: ₹{c.lifetimeSpend.toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 text-slate-700">
+                        {c.periodOrders}
+                        <div className="text-[10px] text-slate-400 font-normal">
+                          Lifetime: {c.lifetimeOrders}
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 text-slate-600">
+                        {c.daysSinceLastOrder === 0 ? "Today" : `${c.daysSinceLastOrder}d ago`}
+                      </td>
+                      <td className="py-2 px-3 text-slate-600">{c.reorderGap}</td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`font-semibold ${
+                            c.churnRisk === "HIGH"
+                              ? "text-rose-600"
+                              : c.churnRisk === "MEDIUM"
+                              ? "text-amber-600"
+                              : "text-emerald-600"
+                          }`}
+                        >
+                          {c.churnRisk}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        <span className="text-indigo-600 font-medium">{c.suggestedAction}</span>
                       </td>
                     </tr>
                   ))}
+                  {filteredCustomerTable.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="py-6 text-center text-slate-400">
+                        No customers found matching search criteria.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1151,7 +1500,7 @@ export default function AnalyticsDashboard() {
       )}
 
       {/* ─────────────────────────────────────────────────────────────
-          5. SECTION 2: PRODUCT ANALYTICS
+          TAB 3: PRODUCT & MENU ANALYTICS
       ───────────────────────────────────────────────────────────── */}
       {activeSection === "products" && (
         <div className="space-y-6">
@@ -1161,355 +1510,252 @@ export default function AnalyticsDashboard() {
               icon="🍽️"
               title="Total Units Sold"
               value={data?.products?.totalUnitsSold || 0}
-              prevValue={data?.kpis?.totalUnitsSold?.prev}
               growth={data?.products?.growth?.unitsSold}
               formula="SUM(OrderItem.quantity in period)"
-              explanation="Total number of dishes, drinks, and food items prepared and served."
+              explanation="Total number of food portions prepared and served."
             />
             <MetricCard
               icon="💰"
-              title="Product Food Revenue"
-              value={`₹${data?.products?.totalRevenue ? data.products.totalRevenue.toLocaleString() : 0}`}
-              prevValue={data?.kpis?.revenue?.prev ? `₹${data.kpis.revenue.prev.toLocaleString()}` : null}
+              title="Food Revenue"
+              value={data?.products?.totalRevenue || 0}
+              prefix="₹"
               growth={data?.products?.growth?.revenue}
-              formula="SUM(OrderItem.line_total)"
-              explanation="Gross food and beverage sales before packaging and delivery charges."
+              formula="SUM(OrderItem.line_total in period)"
+              explanation="Total revenue contribution from menu items."
             />
             <MetricCard
               icon="🏷️"
-              title="Average Selling Price"
-              value={`₹${data?.products?.averageSellingPrice || 0}`}
+              title="Avg Selling Price (ASP)"
+              value={data?.products?.averageSellingPrice || 0}
+              prefix="₹"
               formula="Product Revenue / Units Sold"
-              explanation="The weighted average price collected per dish across the menu."
+              explanation="Average realizable price per dish portion."
             />
             <MetricCard
-              icon="📁"
-              title="Top Category"
-              value={data?.products?.categoryPerformance?.[0]?.category || "General"}
-              suffix={` (${data?.products?.categoryPerformance?.[0]?.contribution || 0}%)`}
-              formula="Category with highest revenue contribution"
-              explanation="The category generating the largest portion of your overall food sales."
+              icon="📦"
+              title="Menu Items Active"
+              value={data?.products?.performanceMatrix?.length || 0}
+              formula="Count of menu items in catalog"
+              explanation="Active dishes offered across all categories."
             />
           </div>
 
-          {/* Product Performance Matrix (Volume × Margin) */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">
-                  Product Performance Matrix (Sales Volume × Margin)
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Actionable menu engineering matrix dividing dishes into 4 strategic quadrants.
+          {/* Product Performance Matrix (Sales Volume x Profit Margin) */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                Product Performance Matrix (Volume × Margin Quadrants)
+              </h3>
+              <p className="text-xs text-slate-500">
+                Categorizes your dishes based on sales volume and gross recipe profitability.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-bold text-emerald-800 uppercase">⭐ Stars</span>
+                  <span className="text-[11px] font-semibold text-emerald-700">
+                    {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "STAR").length || 0} Items
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-900 leading-tight">
+                  High volume & high margin. Your most valuable dishes. Keep inventory stocked at all times.
                 </p>
               </div>
-              <FormulaInfo
-                title="Performance Matrix"
-                formula="Volume (Units Sold) × Profit Margin (%)"
-                explanation="Categorizes dishes to help restaurant owners optimize menu placement, pricing, and ingredient portions."
-              />
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Stars */}
-              <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl p-4 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-indigo-900">⭐ Stars (High Volume & Margin)</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-200/80 text-indigo-900 font-bold">
-                      {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "STAR").length || 0} items
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-indigo-800/80 mb-3">
-                    Top grossing crowd favorites with great profitability. Protect consistency.
-                  </p>
-                  <ul className="text-xs space-y-1 font-semibold text-slate-800">
-                    {data?.products?.performanceMatrix
-                      ?.filter((p: any) => p.quadrant === "STAR")
-                      .slice(0, 4)
-                      .map((p: any) => (
-                        <li key={p.id} className="flex justify-between">
-                          <span className="truncate max-w-[140px]">{p.name}</span>
-                          <span className="text-indigo-700">{p.unitsSold} sold</span>
-                        </li>
-                      ))}
-                  </ul>
+              <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-bold text-blue-800 uppercase">🐄 Cash Cows</span>
+                  <span className="text-[11px] font-semibold text-blue-700">
+                    {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "CASH_COW").length || 0} Items
+                  </span>
                 </div>
+                <p className="text-[11px] text-blue-900 leading-tight">
+                  High sales volume with lower margins. Volume drivers. Optimize portions slightly to expand margins.
+                </p>
               </div>
 
-              {/* Cash Cows */}
-              <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-emerald-900">🐮 Cash Cows (High Volume, Low Margin)</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-200/80 text-emerald-900 font-bold">
-                      {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "CASH_COW").length || 0} items
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-emerald-800/80 mb-3">
-                    High volume staples. Consider portion optimization or a slight price bump.
-                  </p>
-                  <ul className="text-xs space-y-1 font-semibold text-slate-800">
-                    {data?.products?.performanceMatrix
-                      ?.filter((p: any) => p.quadrant === "CASH_COW")
-                      .slice(0, 4)
-                      .map((p: any) => (
-                        <li key={p.id} className="flex justify-between">
-                          <span className="truncate max-w-[140px]">{p.name}</span>
-                          <span className="text-emerald-700">{p.unitsSold} sold</span>
-                        </li>
-                      ))}
-                  </ul>
+              <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-bold text-amber-800 uppercase">💡 Opportunities</span>
+                  <span className="text-[11px] font-semibold text-amber-700">
+                    {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "PUZZLE").length || 0} Items
+                  </span>
                 </div>
+                <p className="text-[11px] text-amber-900 leading-tight">
+                  High margin potential but lower sales. Feature as chef recommendations or bundle into combos.
+                </p>
               </div>
 
-              {/* Puzzles / Opportunity */}
-              <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-4 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-amber-900">💡 Opportunity (High Margin, Low Volume)</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-200/80 text-amber-900 font-bold">
-                      {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "PUZZLE").length || 0} items
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-amber-800/80 mb-3">
-                    High profit potential. Feature on chef specials or pair with top sellers.
-                  </p>
-                  <ul className="text-xs space-y-1 font-semibold text-slate-800">
-                    {data?.products?.performanceMatrix
-                      ?.filter((p: any) => p.quadrant === "PUZZLE")
-                      .slice(0, 4)
-                      .map((p: any) => (
-                        <li key={p.id} className="flex justify-between">
-                          <span className="truncate max-w-[140px]">{p.name}</span>
-                          <span className="text-amber-700">{p.unitsSold} sold</span>
-                        </li>
-                      ))}
-                  </ul>
+              <div className="p-4 rounded-xl bg-slate-100 border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-bold text-slate-700 uppercase">🐕 Underperformers</span>
+                  <span className="text-[11px] font-semibold text-slate-600">
+                    {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "DOG").length || 0} Items
+                  </span>
                 </div>
-              </div>
-
-              {/* Underperformers */}
-              <div className="bg-slate-100 border border-slate-300 rounded-xl p-4 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-bold text-slate-800">⚠️ Underperformers (Low Vol & Margin)</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-200 text-slate-700 font-bold">
-                      {data?.products?.performanceMatrix?.filter((p: any) => p.quadrant === "DOG").length || 0} items
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 mb-3">
-                    Low demand and profit. Review recipe appeal or consider rotating off menu.
-                  </p>
-                  <ul className="text-xs space-y-1 font-semibold text-slate-800">
-                    {data?.products?.performanceMatrix
-                      ?.filter((p: any) => p.quadrant === "DOG")
-                      .slice(0, 4)
-                      .map((p: any) => (
-                        <li key={p.id} className="flex justify-between">
-                          <span className="truncate max-w-[140px]">{p.name}</span>
-                          <span className="text-slate-500">{p.unitsSold} sold</span>
-                        </li>
-                      ))}
-                  </ul>
-                </div>
+                <p className="text-[11px] text-slate-700 leading-tight">
+                  Low volume & low profitability. Review dish appeal, price, or consider rotating out.
+                </p>
               </div>
             </div>
           </div>
 
-          {/* Charts Row: Revenue Trend + Top Selling Products */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Product Revenue & Units Sold Trend</h3>
-              <p className="text-[11px] text-slate-500 mb-4">Daily volume and gross revenue progression.</p>
-              <div className="h-64">
-                <Line
-                  data={productTrendChartData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                      y: { beginAtZero: true, grid: { color: "#F1F5F9" }, title: { display: true, text: "Revenue (₹)" } },
-                      y1: { position: "right", beginAtZero: true, grid: { display: false }, title: { display: true, text: "Units" } },
-                      x: { grid: { display: false } },
-                    },
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Top Products by Revenue</h3>
-              <p className="text-[11px] text-slate-500 mb-4">Ranked by gross sales contribution.</p>
-              <div className="h-64">
-                <Bar
-                  data={topProductsChartData}
-                  options={{
-                    indexAxis: "y",
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                      x: { beginAtZero: true, grid: { color: "#F1F5F9" } },
-                      y: { grid: { display: false } },
-                    },
-                    plugins: { legend: { display: false } },
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Category Share & Frequently Bought Together */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Category Sales Breakdown</h3>
-              <p className="text-[11px] text-slate-500 mb-4">Revenue distribution across menu categories.</p>
-              <div className="h-56">
+          {/* Product Revenue Trend & Category Contribution */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Category Revenue Share
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Revenue contribution split across menu categories.
+              </p>
+              <div className="h-[240px] flex items-center justify-center">
                 <Doughnut
                   data={categoryChartData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { position: "right" } },
-                  }}
+                  options={{ responsive: true, maintainAspectRatio: false }}
                 />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Frequently Bought Together (Product Pairing)</h3>
-                  <p className="text-[11px] text-slate-500">Top item combinations diners order together in the same basket.</p>
-                </div>
-                <FormulaInfo
-                  title="Product Pairing"
-                  formula="Count of distinct orders containing both Item A and Item B"
-                />
-              </div>
-
-              {data?.products?.frequentlyBoughtTogether && data.products.frequentlyBoughtTogether.length > 0 ? (
-                <div className="space-y-2.5">
-                  {data.products.frequentlyBoughtTogether.map((pair: any, idx: number) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-[10px]">
-                          {idx + 1}
-                        </span>
-                        <span className="font-semibold text-slate-800">{pair.pairText}</span>
-                      </div>
-                      <div className="text-right">
-                        <span className="font-bold text-indigo-600 block">{pair.count} orders</span>
-                        <span className="text-[10px] text-slate-400">{pair.pairingRate}% of orders</span>
-                      </div>
+            {/* Product Pairing / Frequently Bought Together */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Frequently Ordered Together (Pairings)
+              </h3>
+              <p className="text-xs text-slate-500 mb-3">
+                Items frequently found in the same cart. Ideal for high-converting combo promotions.
+              </p>
+              <div className="space-y-2">
+                {data?.products?.frequentlyBoughtTogether?.map((p: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 text-xs"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🍱</span>
+                      <span className="font-semibold text-slate-900">{p.pairText}</span>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-8 text-center text-xs text-slate-400">
-                  No multi-item orders recorded in this date range.
-                </div>
-              )}
+                    <div className="text-right">
+                      <span className="font-bold text-indigo-600">{p.count} times</span>
+                      <div className="text-[10px] text-slate-400">{p.pairingRate}% of orders</div>
+                    </div>
+                  </div>
+                ))}
+                {(!data?.products?.frequentlyBoughtTogether || data.products.frequentlyBoughtTogether.length === 0) && (
+                  <p className="text-xs text-slate-400 py-6 text-center">No multi-item baskets recorded in this period.</p>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Product Performance Deep-Dive Table */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+          {/* ─────────────────────────────────────────────────────────
+              PRODUCT ACTION TABLE
+          ───────────────────────────────────────────────────────── */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-bold text-slate-900">Comprehensive Product Performance Table</h3>
-                <p className="text-[11px] text-slate-500">Every menu item with sales velocity, contribution, and margins.</p>
+                <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                  Product Decision & Action Table
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Detailed menu breakdown with recipe margins, repeat purchase rates, and recommendations.
+                </p>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Filter product..."
+                  placeholder="Search product name..."
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
-                  className="text-xs px-3 py-1.5 border border-slate-300 rounded-lg outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 w-44"
                 />
-                <select
-                  value={productCategoryFilter}
-                  onChange={(e) => setProductCategoryFilter(e.target.value)}
-                  className="text-xs px-2.5 py-1.5 border border-slate-300 rounded-lg outline-none bg-white text-slate-700"
-                >
-                  <option value="ALL">All Categories</option>
-                  {data?.products?.categoryPerformance?.map((c: any) => (
-                    <option key={c.category} value={c.category}>
-                      {c.category}
-                    </option>
-                  ))}
-                </select>
                 <select
                   value={productSortBy}
                   onChange={(e) => setProductSortBy(e.target.value as any)}
-                  className="text-xs px-2.5 py-1.5 border border-slate-300 rounded-lg outline-none bg-white text-slate-700"
+                  className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 text-slate-700 bg-white"
                 >
                   <option value="revenue">Sort by Revenue</option>
                   <option value="units">Sort by Units</option>
-                  <option value="growth">Sort by Growth</option>
                   <option value="margin">Sort by Margin</option>
+                  <option value="growth">Sort by Repeat Rate</option>
                 </select>
               </div>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50/70">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
                     <th className="py-2.5 px-3">Product Name</th>
                     <th className="py-2.5 px-3">Category</th>
-                    <th className="py-2.5 px-3 text-right">Units Sold</th>
-                    <th className="py-2.5 px-3 text-right">Revenue</th>
-                    <th className="py-2.5 px-3 text-right">ASP</th>
-                    <th className="py-2.5 px-3 text-right">Contribution</th>
-                    <th className="py-2.5 px-3 text-right">Growth %</th>
-                    <th className="py-2.5 px-3 text-right">Gross Margin</th>
-                    <th className="py-2.5 px-3">Matrix Classification</th>
+                    <th className="py-2.5 px-3">Lifecycle</th>
+                    <th className="py-2.5 px-3">Units</th>
+                    <th className="py-2.5 px-3">Revenue</th>
+                    <th className="py-2.5 px-3">Food Cost %</th>
+                    <th className="py-2.5 px-3">Gross Margin</th>
+                    <th className="py-2.5 px-3">Repeat Rate</th>
+                    <th className="py-2.5 px-3">Attach Rate</th>
+                    <th className="py-2.5 px-3">Suggested Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredProducts.map((p: any) => (
-                    <tr key={p.id} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{p.name}</td>
-                      <td className="py-3 px-3 text-slate-600">{p.categoryName}</td>
-                      <td className="py-3 px-3 text-right font-medium text-slate-800">{p.unitsSold}</td>
-                      <td className="py-3 px-3 text-right font-bold text-slate-900">₹{p.revenue.toLocaleString()}</td>
-                      <td className="py-3 px-3 text-right text-slate-600">₹{p.asp}</td>
-                      <td className="py-3 px-3 text-right font-medium text-slate-700">{p.contribution}%</td>
-                      <td className="py-3 px-3 text-right">
-                        <GrowthBadge value={p.growth} />
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        {p.grossMarginPercent !== null ? (
-                          <span className={`font-semibold ${p.grossMarginPercent >= 60 ? "text-emerald-600" : "text-amber-600"}`}>
-                            {p.grossMarginPercent}%
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-normal">N/A (No recipe)</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3">
+                  {filteredProductTable.map((p: any) => (
+                    <tr key={p.id} className="hover:bg-slate-50/60">
+                      <td className="py-2 px-3 font-semibold text-slate-900">{p.name}</td>
+                      <td className="py-2 px-3 text-slate-600">{p.category}</td>
+                      <td className="py-2 px-3">
                         <span
-                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                            p.quadrant === "STAR"
-                              ? "bg-indigo-100 text-indigo-800"
-                              : p.quadrant === "CASH_COW"
-                              ? "bg-emerald-100 text-emerald-800"
-                              : p.quadrant === "PUZZLE"
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-slate-100 text-slate-600"
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            p.lifecycle === "GROWING"
+                              ? "bg-emerald-50 text-emerald-700"
+                              : p.lifecycle === "NEW"
+                              ? "bg-blue-50 text-blue-700"
+                              : p.lifecycle === "DECLINING"
+                              ? "bg-rose-50 text-rose-700"
+                              : p.lifecycle === "AT_RISK"
+                              ? "bg-amber-50 text-amber-700"
+                              : "bg-slate-100 text-slate-700"
                           }`}
                         >
-                          {p.quadrantLabel}
+                          {p.lifecycle}
                         </span>
+                      </td>
+                      <td className="py-2 px-3 text-slate-800 font-medium">{p.unitsSold}</td>
+                      <td className="py-2 px-3 font-semibold text-slate-900">
+                        ₹{p.revenue.toLocaleString()}
+                        <span className="text-[10px] text-slate-400 font-normal ml-1">({p.contribution}%)</span>
+                      </td>
+                      <td className="py-2 px-3">
+                        {p.foodCostPercent !== null ? (
+                          <span className="font-medium text-slate-800">{p.foodCostPercent}%</span>
+                        ) : (
+                          <span className="text-slate-400 italic">Cost data unavailable</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        {p.grossMarginPercent !== null ? (
+                          <span className="font-semibold text-emerald-600">{p.grossMarginPercent}%</span>
+                        ) : (
+                          <span className="text-slate-400 italic">Cost data unavailable</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-slate-700">{p.repeatPurchaseRate}%</td>
+                      <td className="py-2 px-3 text-slate-700">{p.attachRate}%</td>
+                      <td className="py-2 px-3">
+                        <span className="text-indigo-600 font-medium">{p.suggestedAction}</span>
                       </td>
                     </tr>
                   ))}
+                  {filteredProductTable.length === 0 && (
+                    <tr>
+                      <td colSpan={10} className="py-6 text-center text-slate-400">
+                        No menu items found matching search criteria.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1518,7 +1764,7 @@ export default function AnalyticsDashboard() {
       )}
 
       {/* ─────────────────────────────────────────────────────────────
-          6. SECTION 3: INVENTORY & WASTE ANALYTICS
+          TAB 4: INVENTORY & WASTE ANALYTICS
       ───────────────────────────────────────────────────────────── */}
       {activeSection === "inventory" && (
         <div className="space-y-6">
@@ -1526,245 +1772,366 @@ export default function AnalyticsDashboard() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <MetricCard
               icon="🥫"
-              title="Inventory Valuation"
-              value={`₹${data?.inventory?.valuation ? data.inventory.valuation.toLocaleString() : 0}`}
-              formula="Σ(Current Quantity × Cost Per Unit)"
-              explanation="Total asset value of raw ingredients and stock currently in storage."
+              title="Current Stock Value"
+              value={data?.inventory?.valuation || 0}
+              prefix="₹"
+              formula="SUM(Current Stock * Cost Per Unit)"
+              explanation="Total capital currently in kitchen inventory."
             />
             <MetricCard
-              icon="📦"
-              title="Stock Consumed"
-              value={`₹${data?.inventory?.consumedCost ? data.inventory.consumedCost.toLocaleString() : 0}`}
-              growth={data?.inventory?.consumedCostGrowth}
-              formula="ORDER_DEDUCTION ledger cost"
-              explanation="Total cost of ingredients deducted to fulfill customer orders in this period."
+              icon="🔄"
+              title="Inventory Turnover"
+              value={data?.inventory?.inventoryTurnover !== null ? `${data.inventory.inventoryTurnover}x` : "N/A"}
+              formula="Period Consumption Cost / Average Inventory Value"
+              explanation="Velocity of stock turnover during the selected date window."
             />
             <MetricCard
-              icon="🛒"
+              icon="⏳"
+              title="Store Stock Cover"
+              value={data?.inventory?.daysOfStockCover !== null ? `${data.inventory.daysOfStockCover} days` : "N/A"}
+              formula="Average Days Remaining across active ingredients"
+              explanation="Store-wide average runway before replenishment is required."
+            />
+            <MetricCard
+              icon="⚠️"
+              title="Stockout Risk Count"
+              value={data?.inventory?.lowStockCount + data?.inventory?.outOfStockCount || 0}
+              subtitle={`${data?.inventory?.outOfStockCount || 0} Out of Stock / ${data?.inventory?.lowStockCount || 0} Low`}
+              formula="Items where quantity <= minimum_stock"
+              explanation="Ingredients requiring immediate vendor purchase."
+            />
+            <MetricCard
+              icon="🚚"
               title="Stock Purchased"
-              value={`₹${data?.inventory?.purchasedCost ? data.inventory.purchasedCost.toLocaleString() : 0}`}
+              value={`₹${data?.inventory?.purchasedCost?.toLocaleString() || 0}`}
+              subtitle={`${data?.inventory?.purchasedQty || 0} units bought`}
               growth={data?.inventory?.purchasedCostGrowth}
-              formula="PURCHASE transactions in period"
-              explanation="Total spending on inventory replenishment during this timeframe."
+              formula="SUM(PURCHASE transaction costs)"
+              explanation="Total vendor inventory restocking invoices in period."
+            />
+            <MetricCard
+              icon="🍳"
+              title="Stock Consumed"
+              value={`₹${data?.inventory?.consumedCost?.toLocaleString() || 0}`}
+              subtitle={`${data?.inventory?.consumedQty || 0} units deducted`}
+              growth={data?.inventory?.consumedCostGrowth}
+              formula="SUM(ORDER_DEDUCTION transaction costs)"
+              explanation="Physical stock depleted by confirmed dining orders."
             />
             <MetricCard
               icon="🗑️"
-              title="Wasted Stock Cost"
-              value={`₹${data?.inventory?.wastedCost ? data.inventory.wastedCost.toLocaleString() : 0}`}
-              suffix={` (${data?.inventory?.wastePercent || 0}% rate)`}
+              title="Total Waste Cost"
+              value={`₹${data?.inventory?.wastedCost?.toLocaleString() || 0}`}
+              subtitle={`${data?.inventory?.wastedQty || 0} units wasted (${data?.inventory?.wastePercent || 0}%)`}
               growth={data?.inventory?.wastedCostGrowth}
-              formula="WASTAGE transactions cost"
-              explanation="Financial loss due to spoiled, damaged, or discarded stock."
+              formula="SUM(WASTAGE transaction costs)"
+              explanation="Direct cost of spoiled, expired, or spilled ingredients."
+            />
+            <MetricCard
+              icon="📊"
+              title="Stockout Rate"
+              value={`${data?.inventory?.stockoutRate || 0}%`}
+              formula="Out of Stock Items / Total Items * 100"
+              explanation="Percentage of catalog ingredients completely depleted."
             />
           </div>
 
-          {/* Expected vs Actual Consumption Table (Over-portioning / Leakage Detection) */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">
-                  Expected vs Actual Recipe Consumption (Portioning Variance)
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Compares recipe theoretical requirements against actual inventory deductions to detect over-portioning or shrinkage.
-                </p>
-              </div>
-              <FormulaInfo
-                title="Consumption Variance"
-                formula="Variance = Actual Deduction - Expected Recipe Consumption"
-                explanation="Positive variance indicates kitchen over-portioning or unrecorded loss. Negative variance indicates dishes prepared with fewer ingredients than specified."
-              />
+          {/* ─────────────────────────────────────────────────────────
+              INGREDIENT -> PRODUCT IMPACT ANALYSIS
+          ───────────────────────────────────────────────────────── */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
+            <div className="border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                Ingredient → Menu Product Impact Analysis
+              </h3>
+              <p className="text-xs text-slate-500">
+                Shows exactly which menu dishes will be disabled (86'd) if an ingredient stockout occurs.
+              </p>
             </div>
 
-            {data?.inventory?.consumptionVariance && data.inventory.consumptionVariance.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50/70">
-                      <th className="py-2.5 px-3">Ingredient</th>
-                      <th className="py-2.5 px-3">Unit</th>
-                      <th className="py-2.5 px-3 text-right">Expected (Recipe)</th>
-                      <th className="py-2.5 px-3 text-right">Actual Consumed</th>
-                      <th className="py-2.5 px-3 text-right">Variance Qty</th>
-                      <th className="py-2.5 px-3 text-right">Variance %</th>
-                      <th className="py-2.5 px-3">Portioning Assessment</th>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Ingredient</th>
+                    <th className="py-2.5 px-3">Current Stock</th>
+                    <th className="py-2.5 px-3">Days Remaining</th>
+                    <th className="py-2.5 px-3">Dishes Affected</th>
+                    <th className="py-2.5 px-3">Servings Left</th>
+                    <th className="py-2.5 px-3">Sales At Risk</th>
+                    <th className="py-2.5 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {data?.inventory?.ingredientProductImpact?.map((item: any) => (
+                    <tr key={item.ingredientId} className="hover:bg-slate-50/60">
+                      <td className="py-2 px-3 font-semibold text-slate-900">{item.name}</td>
+                      <td className="py-2 px-3 text-slate-700">
+                        {item.currentStock} {item.unit}
+                      </td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`font-semibold ${
+                            item.daysRemaining !== null && item.daysRemaining <= 2
+                              ? "text-rose-600"
+                              : "text-amber-600"
+                          }`}
+                        >
+                          {item.daysRemaining !== null ? `~${item.daysRemaining} days` : "Low stock"}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-slate-800">
+                        <span className="font-semibold text-indigo-700">{item.dishesCount} dishes: </span>
+                        <span className="text-slate-600">{item.dishesAffected.slice(0, 3).join(", ")}</span>
+                        {item.dishesCount > 3 && <span className="text-slate-400"> +{item.dishesCount - 3} more</span>}
+                      </td>
+                      <td className="py-2 px-3 text-slate-700 font-medium">~{item.servingsRemaining} portions</td>
+                      <td className="py-2 px-3 font-semibold text-rose-600">
+                        ₹{item.salesAtRisk.toLocaleString()}
+                      </td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            item.reorderStatus === "OUT_OF_STOCK"
+                              ? "bg-rose-50 text-rose-700 border border-rose-200"
+                              : item.reorderStatus === "CRITICAL"
+                              ? "bg-rose-50 text-rose-700 border border-rose-200"
+                              : "bg-amber-50 text-amber-700 border border-amber-200"
+                          }`}
+                        >
+                          {item.reorderStatus}
+                        </span>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {data.inventory.consumptionVariance.map((c: any) => (
-                      <tr key={c.id} className="hover:bg-slate-50/50">
-                        <td className="py-3 px-3 font-semibold text-slate-900">{c.name}</td>
-                        <td className="py-3 px-3 text-slate-600">{c.unit}</td>
-                        <td className="py-3 px-3 text-right font-medium text-slate-700">
-                          {c.expectedQty} {c.unit}
-                        </td>
-                        <td className="py-3 px-3 text-right font-bold text-slate-900">
-                          {c.actualQty} {c.unit}
-                        </td>
-                        <td className="py-3 px-3 text-right font-semibold">
-                          <span className={c.variance > 0 ? "text-rose-600" : c.variance < 0 ? "text-amber-600" : "text-emerald-600"}>
-                            {c.variance > 0 ? `+${c.variance}` : c.variance} {c.unit}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          {c.variancePercent !== null ? (
-                            <span className={c.variancePercent > 5 ? "font-bold text-rose-600" : "text-slate-700 font-medium"}>
-                              {c.variancePercent > 0 ? `+${c.variancePercent}%` : `${c.variancePercent}%`}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">N/A</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                              c.status === "Optimal"
-                                ? "bg-emerald-100 text-emerald-800"
-                                : c.status.includes("Over")
-                                ? "bg-rose-100 text-rose-800"
-                                : "bg-amber-100 text-amber-800"
-                            }`}
-                          >
-                            {c.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="py-8 text-center text-xs text-slate-400">
-                No recipe ingredients linked to items sold in this period.
-              </div>
-            )}
+                  ))}
+                  {(!data?.inventory?.ingredientProductImpact || data.inventory.ingredientProductImpact.length === 0) && (
+                    <tr>
+                      <td colSpan={7} className="py-6 text-center text-slate-400">
+                        No critical stockouts detected. All recipe ingredients are currently healthy!
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          {/* Charts Row: Consumption Timeline + Waste Breakdown */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Stock Consumption & Waste Timeline</h3>
-              <p className="text-[11px] text-slate-500 mb-4">Daily inventory usage value vs wastage cost.</p>
-              <div className="h-64">
-                <Line
-                  data={inventoryTimelineData}
+          {/* Expected vs Actual Consumption Variance Table */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
+            <div className="border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                Recipe Variance Analysis (Expected vs Actual Usage)
+              </h3>
+              <p className="text-xs text-slate-500">
+                Detects kitchen over-portioning, theft leakage, or unrecorded recipe adjustments.
+              </p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Ingredient</th>
+                    <th className="py-2.5 px-3">Expected (Recipe)</th>
+                    <th className="py-2.5 px-3">Actual (Deducted)</th>
+                    <th className="py-2.5 px-3">Variance</th>
+                    <th className="py-2.5 px-3">Variance %</th>
+                    <th className="py-2.5 px-3">Variance Cost</th>
+                    <th className="py-2.5 px-3">Observation</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {data?.inventory?.consumptionVariance?.map((v: any) => (
+                    <tr key={v.id} className="hover:bg-slate-50/60">
+                      <td className="py-2 px-3 font-semibold text-slate-900">{v.name}</td>
+                      <td className="py-2 px-3 text-slate-600">
+                        {v.expectedQty} {v.unit}
+                      </td>
+                      <td className="py-2 px-3 text-slate-800 font-medium">
+                        {v.actualQty} {v.unit}
+                      </td>
+                      <td className="py-2 px-3 font-semibold">
+                        <span className={v.variance > 0 ? "text-rose-600" : v.variance < 0 ? "text-amber-600" : "text-emerald-600"}>
+                          {v.variance > 0 ? `+${v.variance}` : v.variance} {v.unit}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        <GrowthBadge value={v.variancePercent} />
+                      </td>
+                      <td className="py-2 px-3 font-semibold text-slate-900">
+                        ₹{v.varianceCost?.toLocaleString() || 0}
+                      </td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                            v.status.includes("Over-portioned")
+                              ? "bg-rose-50 text-rose-700"
+                              : v.status.includes("Optimal")
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {v.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {(!data?.inventory?.consumptionVariance || data.inventory.consumptionVariance.length === 0) && (
+                    <tr>
+                      <td colSpan={7} className="py-6 text-center text-slate-400">
+                        No recipe deductions recorded in this period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Waste by Ingredient & Reason */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Highest Waste Cost by Ingredient
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Identifies which ingredients cause the highest financial loss.
+              </p>
+              <div className="h-[240px]">
+                <Bar
+                  data={wasteIngredientChartData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                      y: { beginAtZero: true, grid: { color: "#F1F5F9" } },
-                      x: { grid: { display: false } },
+                      y: {
+                        beginAtZero: true,
+                        ticks: { callback: (val) => `₹${val}` },
+                      },
                     },
                   }}
                 />
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <h3 className="text-sm font-bold text-slate-900 mb-1">Waste by Ingredient</h3>
-              <p className="text-[11px] text-slate-500 mb-4">Highest wasted raw stock by financial loss.</p>
-              <div className="h-64">
-                {data?.inventory?.wasteByIngredient?.length > 0 ? (
-                  <Bar
-                    data={wasteIngredientChartData}
-                    options={{
-                      indexAxis: "y",
-                      responsive: true,
-                      maintainAspectRatio: false,
-                      scales: {
-                        x: { beginAtZero: true, grid: { color: "#F1F5F9" } },
-                        y: { grid: { display: false } },
-                      },
-                      plugins: { legend: { display: false } },
-                    }}
-                  />
-                ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-slate-400">
-                    No wastage recorded in this period.
-                  </div>
-                )}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+              <h3 className="text-sm font-bold text-slate-800 tracking-tight mb-1">
+                Wastage Causes & Reasons
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Categorized by spoilage, prep error, expired stock, etc.
+              </p>
+              <div className="h-[240px] flex items-center justify-center">
+                <Doughnut
+                  data={wasteReasonChartData}
+                  options={{ responsive: true, maintainAspectRatio: false }}
+                />
               </div>
             </div>
           </div>
 
-          {/* Reorder Analysis & Approaching Stockout */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+          {/* ─────────────────────────────────────────────────────────
+              INVENTORY ACTION TABLE
+          ───────────────────────────────────────────────────────── */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-bold text-slate-900">
-                  Stock Run-Rate & Reorder Urgency Analysis
+                <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                  Inventory Decision & Action Table
                 </h3>
-                <p className="text-[11px] text-slate-500">
-                  Estimated days of stock remaining based on recent daily run-rate consumption.
+                <p className="text-xs text-slate-500">
+                  Stock status, reorder urgency, and concrete replenishment recommendations.
                 </p>
               </div>
-              <FormulaInfo
-                title="Days Remaining"
-                formula="Current Stock / Average Daily Consumption in Period"
-                explanation="Calculates how many days before an ingredient runs out completely if current ordering velocity continues."
-              />
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Search ingredient..."
+                  value={inventorySearch}
+                  onChange={(e) => setInventorySearch(e.target.value)}
+                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 w-44"
+                />
+                <select
+                  value={inventoryStatusFilter}
+                  onChange={(e) => setInventoryStatusFilter(e.target.value)}
+                  className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 text-slate-700 bg-white"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="OUT_OF_STOCK">Out of Stock</option>
+                  <option value="CRITICAL">Critical</option>
+                  <option value="LOW_STOCK">Low Stock</option>
+                  <option value="HEALTHY">Healthy</option>
+                </select>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50/70">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
                     <th className="py-2.5 px-3">Ingredient</th>
-                    <th className="py-2.5 px-3 text-right">Current Stock</th>
-                    <th className="py-2.5 px-3 text-right">Min Stock Target</th>
-                    <th className="py-2.5 px-3 text-right">Reorder Threshold</th>
-                    <th className="py-2.5 px-3 text-right">Avg Daily Usage</th>
-                    <th className="py-2.5 px-3 text-right">Days Remaining</th>
-                    <th className="py-2.5 px-3 text-right">Suggested Reorder</th>
-                    <th className="py-2.5 px-3">Action</th>
+                    <th className="py-2.5 px-3">Current Stock</th>
+                    <th className="py-2.5 px-3">Days Remaining</th>
+                    <th className="py-2.5 px-3">Consumption</th>
+                    <th className="py-2.5 px-3">Variance</th>
+                    <th className="py-2.5 px-3">Waste Cost</th>
+                    <th className="py-2.5 px-3">Reorder Status</th>
+                    <th className="py-2.5 px-3">Priority</th>
+                    <th className="py-2.5 px-3">Suggested Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {data?.inventory?.reorderAnalysis?.map((item: any) => (
-                    <tr key={item.id} className="hover:bg-slate-50/50">
-                      <td className="py-3 px-3 font-semibold text-slate-900">{item.name}</td>
-                      <td className="py-3 px-3 text-right font-bold text-slate-900">
-                        {item.currentStock} {item.unit}
+                  {filteredInventoryTable.map((inv: any) => (
+                    <tr key={inv.id} className="hover:bg-slate-50/60">
+                      <td className="py-2 px-3 font-semibold text-slate-900">{inv.name}</td>
+                      <td className="py-2 px-3 text-slate-800 font-medium">
+                        {inv.currentStock} {inv.unit}
                       </td>
-                      <td className="py-3 px-3 text-right text-slate-600">
-                        {item.minimumStock} {item.unit}
-                      </td>
-                      <td className="py-3 px-3 text-right text-slate-600">
-                        {item.reorderLevel} {item.unit}
-                      </td>
-                      <td className="py-3 px-3 text-right text-slate-700">
-                        {item.avgDailyConsumption} {item.unit}/day
-                      </td>
-                      <td className="py-3 px-3 text-right font-bold">
-                        {item.daysRemaining !== null ? (
-                          <span
-                            className={
-                              item.daysRemaining <= 3
-                                ? "text-rose-600 bg-rose-50 px-2 py-0.5 rounded"
-                                : item.daysRemaining <= 7
-                                ? "text-amber-600 bg-amber-50 px-2 py-0.5 rounded"
-                                : "text-emerald-700"
-                            }
-                          >
-                            ~{item.daysRemaining} days
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 font-normal">N/A (No usage)</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-right font-bold text-indigo-700">
-                        {item.suggestedReorder > 0 ? `${item.suggestedReorder} ${item.unit}` : "-"}
-                      </td>
-                      <td className="py-3 px-3">
-                        <Link
-                          href="/inventory"
-                          className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 rounded transition-colors inline-block"
+                      <td className="py-2 px-3 text-slate-600">{inv.daysRemaining}</td>
+                      <td className="py-2 px-3 text-slate-700">{inv.consumption}</td>
+                      <td className="py-2 px-3 text-slate-700">{inv.variance}</td>
+                      <td className="py-2 px-3 text-slate-700">{inv.wasteCost}</td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            inv.reorderStatus === "OUT_OF_STOCK"
+                              ? "bg-rose-50 text-rose-700 border border-rose-200"
+                              : inv.reorderStatus === "CRITICAL"
+                              ? "bg-rose-50 text-rose-700 border border-rose-200"
+                              : inv.reorderStatus === "LOW_STOCK"
+                              ? "bg-amber-50 text-amber-700 border border-amber-200"
+                              : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                          }`}
                         >
-                          Manage Stock →
-                        </Link>
+                          {inv.reorderStatus}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`font-semibold ${
+                            inv.priority === "HIGH"
+                              ? "text-rose-600"
+                              : inv.priority === "MEDIUM"
+                              ? "text-amber-600"
+                              : "text-emerald-600"
+                          }`}
+                        >
+                          {inv.priority}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        <span className="text-indigo-600 font-medium">{inv.suggestedAction}</span>
                       </td>
                     </tr>
                   ))}
+                  {filteredInventoryTable.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="py-6 text-center text-slate-400">
+                        No inventory items found matching search criteria.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1773,65 +2140,15 @@ export default function AnalyticsDashboard() {
       )}
 
       {/* ─────────────────────────────────────────────────────────────
-          7. RECENT ORDERS QUICK ACCESS (ORDER DRAWER INTEGRATION)
+          ORDER DETAILS DRAWER MODAL
       ───────────────────────────────────────────────────────────── */}
-      {data?.recentOrders && data.recentOrders.length > 0 && (
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">Recent Completed / Live Orders</h3>
-              <p className="text-[11px] text-slate-500">Click any order to inspect details in the drawer.</p>
-            </div>
-            <Link href="/orders" className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold">
-              View All Orders →
-            </Link>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-500 font-semibold bg-slate-50/70">
-                  <th className="py-2.5 px-3">Order #</th>
-                  <th className="py-2.5 px-3">Customer</th>
-                  <th className="py-2.5 px-3">Payment</th>
-                  <th className="py-2.5 px-3">Status</th>
-                  <th className="py-2.5 px-3 text-right">Amount</th>
-                  <th className="py-2.5 px-3">Time</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.recentOrders.map((o: any) => (
-                  <tr
-                    key={o.id}
-                    onClick={() => setSelectedOrderId(o.id)}
-                    className="hover:bg-indigo-50/40 cursor-pointer transition-colors"
-                  >
-                    <td className="py-3 px-3 font-bold text-indigo-700">#{o.order_number}</td>
-                    <td className="py-3 px-3 font-medium text-slate-800">{o.customer_name}</td>
-                    <td className="py-3 px-3 text-slate-600">{o.payment_method}</td>
-                    <td className="py-3 px-3">
-                      <StatusBadge status={o.status} />
-                    </td>
-                    <td className="py-3 px-3 text-right font-bold text-slate-900">₹{o.total.toFixed(2)}</td>
-                    <td className="py-3 px-3 text-slate-400">
-                      {new Date(o.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {selectedOrderId && (
+        <OrderDrawer
+          orderId={selectedOrderId}
+          onClose={() => setSelectedOrderId(null)}
+          onStatusUpdate={handleStatusUpdate}
+        />
       )}
-
-      {/* Order Drawer Modal */}
-      <OrderDrawer
-        orderId={selectedOrderId}
-        onClose={() => setSelectedOrderId(null)}
-        onStatusUpdate={async () => {
-          await fetchAnalytics()
-        }}
-      />
     </div>
   )
 }

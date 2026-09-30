@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { calculateRFM, RFM_SEGMENT_DEFINITIONS } from "@/lib/rfm"
 
 // Safe Growth calculation: (Current - Prev) / Prev * 100
 // Strictly returns null if prev is 0 (frontend displays N/A, never Infinity or 100%)
@@ -61,6 +62,12 @@ export async function GET(request: Request) {
     const range = searchParams.get("range") || "30DAYS"
     const startDateParam = searchParams.get("startDate")
     const endDateParam = searchParams.get("endDate")
+    const orderTypeFilter = searchParams.get("orderType") || "ALL"
+    const categoryIdFilter = searchParams.get("categoryId") || "ALL"
+    const itemIdFilter = searchParams.get("itemId") || "ALL"
+    const channelFilter = searchParams.get("channel") || "ALL"
+    const paymentMethodFilter = searchParams.get("paymentMethod") || "ALL"
+    const customerTypeFilter = searchParams.get("customerType") || "ALL"
 
     const now = new Date()
     const { startDate, endDate, prevStartDate, prevEndDate, durationMs } = getDateRanges(
@@ -251,18 +258,25 @@ export async function GET(request: Request) {
       }),
     ])
 
-    // Filter valid (non-cancelled, non-rejected) orders
-    const validCurrent = allOrdersInPeriod.filter((o) => o.status !== "CANCELLED" && o.status !== "REJECTED")
-    const validPrev = prevOrdersInPeriod.filter((o) => o.status !== "CANCELLED" && o.status !== "REJECTED")
-
     // ─────────────────────────────────────────────────────────────
-    // 2. RECIPE COST & MARGIN LOOKUP TABLE
+    // 2. RECIPE COST & MARGIN LOOKUP TABLE + FILTER OPTIONS
     // ─────────────────────────────────────────────────────────────
     const menuItemLookup = new Map<string, (typeof allMenuItems)[0]>()
     const recipeCostMap = new Map<string, { cost: number; hasRecipe: boolean }>()
+    const uniqueCategoriesMap = new Map<string, string>()
+    const uniqueItemsList: Array<{ id: string; name: string; categoryId: string }> = []
 
     for (const item of allMenuItems) {
       menuItemLookup.set(item.id, item)
+      if (item.category) {
+        uniqueCategoriesMap.set(item.category.id, item.category.name)
+      }
+      uniqueItemsList.push({
+        id: item.id,
+        name: item.name,
+        categoryId: item.category?.id || "UNCATEGORIZED",
+      })
+
       let cost = 0
       let hasRecipe = false
       if (item.ingredients && item.ingredients.length > 0) {
@@ -274,6 +288,131 @@ export async function GET(request: Request) {
       }
       recipeCostMap.set(item.id, { cost, hasRecipe })
     }
+
+    const uniqueCategoriesList = Array.from(uniqueCategoriesMap.entries()).map(([id, name]) => ({ id, name }))
+
+    // ─────────────────────────────────────────────────────────────
+    // 3. FULL LIFETIME CUSTOMER HISTORY & RFM ENGINE
+    // ─────────────────────────────────────────────────────────────
+    const customerHistMap = new Map<
+      string,
+      {
+        id: string
+        name: string
+        phone: string
+        firstOrder: Date
+        lastOrder: Date
+        orders: Array<{
+          id: string
+          order_number: string
+          total: number
+          created_at: Date
+          items: Array<{ menu_item_id: string; item_name_snapshot: string; quantity: number }>
+        }>
+        totalSpend: number
+      }
+    >()
+
+    for (const ord of allHistoricalOrders) {
+      const existing = customerHistMap.get(ord.customer_id)
+      const ordSummary = {
+        id: ord.id,
+        order_number: ord.order_number,
+        total: ord.total,
+        created_at: ord.created_at,
+        items: ord.items,
+      }
+      if (!existing) {
+        customerHistMap.set(ord.customer_id, {
+          id: ord.customer_id,
+          name: ord.customer_name_snapshot,
+          phone: ord.customer_phone_snapshot,
+          firstOrder: ord.created_at,
+          lastOrder: ord.created_at,
+          orders: [ordSummary],
+          totalSpend: ord.total,
+        })
+      } else {
+        existing.lastOrder = ord.created_at
+        existing.orders.push(ordSummary)
+        existing.totalSpend += ord.total
+      }
+    }
+
+    const allCustomersList = Array.from(customerHistMap.values())
+    const spendThreshold80 =
+      allCustomersList.length > 0
+        ? [...allCustomersList].sort((a, b) => b.totalSpend - a.totalSpend)[
+            Math.floor(allCustomersList.length * 0.2)
+          ]?.totalSpend || 2000
+        : 2000
+
+    // Shared RFM calculation across all customers
+    const { customerScoreMap: rfmScoreMap, summary: rfmSummary } = calculateRFM(allCustomersList, now)
+
+    // ─────────────────────────────────────────────────────────────
+    // 4. GLOBAL MULTI-DIMENSIONAL ORDER FILTERING
+    // ─────────────────────────────────────────────────────────────
+    const isOrderMatchingFilters = (o: {
+      order_type?: string | null
+      source?: string | null
+      payment_method?: string | null
+      customer_id: string
+      items: Array<{ menu_item_id: string }>
+    }): boolean => {
+      // 1. Order Type
+      if (orderTypeFilter !== "ALL" && o.order_type !== orderTypeFilter) {
+        return false
+      }
+      // 2. Sales Channel
+      if (channelFilter !== "ALL" && o.source !== channelFilter) {
+        return false
+      }
+      // 3. Payment Method
+      if (paymentMethodFilter !== "ALL" && o.payment_method !== paymentMethodFilter) {
+        return false
+      }
+      // 4. Category
+      if (categoryIdFilter !== "ALL") {
+        const matchesCategory = o.items.some((it) => {
+          const mi = menuItemLookup.get(it.menu_item_id)
+          return mi?.category?.id === categoryIdFilter
+        })
+        if (!matchesCategory) return false
+      }
+      // 5. Item
+      if (itemIdFilter !== "ALL") {
+        const matchesItem = o.items.some((it) => it.menu_item_id === itemIdFilter)
+        if (!matchesItem) return false
+      }
+      // 6. Customer Type
+      if (customerTypeFilter !== "ALL") {
+        const cust = customerHistMap.get(o.customer_id)
+        if (!cust) return false
+        const daysSinceLast = Math.max(0, Math.floor((now.getTime() - cust.lastOrder.getTime()) / (1000 * 60 * 60 * 24)))
+        if (customerTypeFilter === "NEW") {
+          if (cust.firstOrder < startDate || cust.firstOrder > endDate) return false
+        } else if (customerTypeFilter === "RETURNING") {
+          if (cust.firstOrder >= startDate && cust.firstOrder <= endDate) return false
+        } else if (customerTypeFilter === "LOYAL") {
+          if (cust.orders.length < 4 || daysSinceLast > 30) return false
+        } else if (customerTypeFilter === "HIGH_VALUE") {
+          if (cust.totalSpend < spendThreshold80) return false
+        } else if (customerTypeFilter === "AT_RISK") {
+          if (cust.orders.length < 2 || daysSinceLast <= 30 || daysSinceLast > 60) return false
+        } else if (customerTypeFilter === "CHURNED") {
+          if (cust.orders.length < 2 || daysSinceLast <= 60) return false
+        }
+      }
+      return true
+    }
+
+    const filteredCurrentAll = allOrdersInPeriod.filter(isOrderMatchingFilters)
+    const filteredPrevAll = prevOrdersInPeriod.filter(isOrderMatchingFilters)
+
+    // Filter valid (non-cancelled, non-rejected) orders
+    const validCurrent = filteredCurrentAll.filter((o) => o.status !== "CANCELLED" && o.status !== "REJECTED")
+    const validPrev = filteredPrevAll.filter((o) => o.status !== "CANCELLED" && o.status !== "REJECTED")
 
     // ─────────────────────────────────────────────────────────────
     // 3. CORE FINANCIAL & OPERATIONAL KPIS
@@ -352,19 +491,19 @@ export async function GET(request: Request) {
     const yesterdayAOV = yesterdayOrderCount > 0 ? Math.round(yesterdaySales / yesterdayOrderCount) : 0
     const todayAovGrowth = calcGrowth(todayAOV, yesterdayAOV)
 
-    const cancelledOrdersCount = allOrdersInPeriod.filter((o) => o.status === "CANCELLED").length
-    const rejectedOrdersCount = allOrdersInPeriod.filter((o) => o.status === "REJECTED").length
+    const cancelledOrdersCount = filteredCurrentAll.filter((o) => o.status === "CANCELLED").length
+    const rejectedOrdersCount = filteredCurrentAll.filter((o) => o.status === "REJECTED").length
     const totalCancelledOrRejected = cancelledOrdersCount + rejectedOrdersCount
-    const lostRevenue = allOrdersInPeriod
+    const lostRevenue = filteredCurrentAll
       .filter((o) => o.status === "CANCELLED" || o.status === "REJECTED")
       .reduce((a, c) => a + c.total, 0)
 
     // Status breakdown
     const statusCounts = {
-      NEW: allOrdersInPeriod.filter((o) => o.status === "NEW").length,
-      IN_PROCESS: allOrdersInPeriod.filter((o) => o.status === "IN_PROCESS").length,
-      OUT_FOR_DELIVERY: allOrdersInPeriod.filter((o) => o.status === "OUT_FOR_DELIVERY").length,
-      DELIVERED: allOrdersInPeriod.filter((o) => o.status === "DELIVERED").length,
+      NEW: filteredCurrentAll.filter((o) => o.status === "NEW").length,
+      IN_PROCESS: filteredCurrentAll.filter((o) => o.status === "IN_PROCESS").length,
+      OUT_FOR_DELIVERY: filteredCurrentAll.filter((o) => o.status === "OUT_FOR_DELIVERY").length,
+      DELIVERED: filteredCurrentAll.filter((o) => o.status === "DELIVERED").length,
       CANCELLED: cancelledOrdersCount,
       REJECTED: rejectedOrdersCount,
     }
@@ -372,52 +511,6 @@ export async function GET(request: Request) {
     // ─────────────────────────────────────────────────────────────
     // 4. SECTION 1: CUSTOMER ANALYTICS & TIME-BASED RETENTION
     // ─────────────────────────────────────────────────────────────
-    // Build full lifetime customer history map
-    const customerHistMap = new Map<
-      string,
-      {
-        id: string
-        name: string
-        phone: string
-        firstOrder: Date
-        lastOrder: Date
-        orders: Array<{
-          id: string
-          order_number: string
-          total: number
-          created_at: Date
-          items: Array<{ menu_item_id: string; item_name_snapshot: string; quantity: number }>
-        }>
-        totalSpend: number
-      }
-    >()
-
-    for (const ord of allHistoricalOrders) {
-      const existing = customerHistMap.get(ord.customer_id)
-      const ordSummary = {
-        id: ord.id,
-        order_number: ord.order_number,
-        total: ord.total,
-        created_at: ord.created_at,
-        items: ord.items,
-      }
-      if (!existing) {
-        customerHistMap.set(ord.customer_id, {
-          id: ord.customer_id,
-          name: ord.customer_name_snapshot,
-          phone: ord.customer_phone_snapshot,
-          firstOrder: ord.created_at,
-          lastOrder: ord.created_at,
-          orders: [ordSummary],
-          totalSpend: ord.total,
-        })
-      } else {
-        existing.lastOrder = ord.created_at
-        existing.orders.push(ordSummary)
-        existing.totalSpend += ord.total
-      }
-    }
-
     const currentCustomerIds = Array.from(new Set(validCurrent.map((o) => o.customer_id)))
     const prevCustomerIds = new Set(validPrev.map((o) => o.customer_id))
 
@@ -799,14 +892,6 @@ export async function GET(request: Request) {
     const favouriteCategory = [...catCountMap.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "N/A"
 
     // RFM Analysis, Segments, and Decision Action Table
-    const allCustomersList = Array.from(customerHistMap.values())
-    const spendThreshold80 =
-      allCustomersList.length > 0
-        ? [...allCustomersList].sort((a, b) => b.totalSpend - a.totalSpend)[
-            Math.floor(allCustomersList.length * 0.2)
-          ]?.totalSpend || 2000
-        : 2000
-
     const segmentCounts = {
       NEW: 0,
       REGULAR: 0,
@@ -882,6 +967,8 @@ export async function GET(request: Request) {
       const currentPeriodOrders = validCurrent.filter((o) => o.customer_id === c.id)
       const currentPeriodRevenue = currentPeriodOrders.reduce((sum, o) => sum + o.total, 0)
 
+      const rfm = rfmScoreMap.get(c.id)
+
       customerActionTable.push({
         id: c.id,
         name: c.name || "Valued Customer",
@@ -899,6 +986,19 @@ export async function GET(request: Request) {
         favouriteDish: topItem,
         churnRisk,
         suggestedAction,
+        // RFM segmentation layer
+        recencyDays: rfm?.recencyDays ?? daysSinceLastOrder,
+        recencyScore: rfm?.recencyScore ?? 1,
+        frequencyCount: rfm?.frequencyCount ?? c.orders.length,
+        frequencyScore: rfm?.frequencyScore ?? 1,
+        monetarySpend: rfm?.monetarySpend ?? Math.round(c.totalSpend),
+        monetaryScore: rfm?.monetaryScore ?? 1,
+        rfmScore: rfm?.rfmScore ?? "1-1-1",
+        rfmAverage: rfm?.rfmAverage ?? 1.0,
+        rfmCompositeIndex: rfm?.rfmCompositeIndex ?? 111,
+        rfmSegment: rfm?.rfmSegment ?? "Lost Customers",
+        rfmSegmentKey: rfm?.rfmSegmentKey ?? "LOST",
+        rfmSegmentMeta: rfm?.rfmSegmentMeta,
       })
     }
 
@@ -1851,6 +1951,11 @@ export async function GET(request: Request) {
         topCustomers,
         customerActionTable,
         cohortRetention,
+        rfm: {
+          summary: rfmSummary,
+          segments: Object.values(RFM_SEGMENT_DEFINITIONS),
+          totalScored: rfmSummary.totalScoredCustomers,
+        },
       },
 
       // 3. PRODUCT / MENU ANALYTICS
@@ -1931,6 +2036,56 @@ export async function GET(request: Request) {
         status: o.status,
         created_at: o.created_at,
       })),
+
+      // Global Analytics Filter Metadata
+      filterOptions: {
+        orderTypes: [
+          { id: "ALL", label: "All Order Types" },
+          { id: "DINING", label: "🍽️ Dining" },
+          { id: "TAKEAWAY", label: "🥡 Takeaway" },
+          { id: "HOME_DELIVERY", label: "🛵 Delivery" },
+        ],
+        categories: [
+          { id: "ALL", name: "All Categories" },
+          ...uniqueCategoriesList,
+        ],
+        items: [
+          { id: "ALL", name: "All Items", categoryId: "ALL" },
+          ...uniqueItemsList,
+        ],
+        channels: [
+          { id: "ALL", label: "All Channels" },
+          { id: "POS", label: "💻 POS Terminal" },
+          { id: "WHATSAPP", label: "📱 WhatsApp" },
+          { id: "ONLINE", label: "🌐 Online Web" },
+          { id: "OTHER", label: "Other" },
+        ],
+        paymentMethods: [
+          { id: "ALL", label: "All Methods" },
+          { id: "CASH", label: "💵 Cash" },
+          { id: "UPI", label: "📱 UPI" },
+          { id: "CARD", label: "💳 Card" },
+          { id: "ONLINE", label: "🌐 Online" },
+          { id: "OTHER", label: "Other" },
+        ],
+        customerTypes: [
+          { id: "ALL", label: "All Customer Types" },
+          { id: "NEW", label: "🆕 New Diners" },
+          { id: "RETURNING", label: "🔄 Returning Regulars" },
+          { id: "LOYAL", label: "⭐ Loyal Diners" },
+          { id: "HIGH_VALUE", label: "💎 High Value / VIP" },
+          { id: "AT_RISK", label: "⚠️ At-Risk Diners" },
+          { id: "CHURNED", label: "💔 Churned Diners" },
+        ],
+      },
+      appliedFilters: {
+        orderType: orderTypeFilter,
+        categoryId: categoryIdFilter,
+        itemId: itemIdFilter,
+        channel: channelFilter,
+        paymentMethod: paymentMethodFilter,
+        customerType: customerTypeFilter,
+      },
     })
   } catch (error: any) {
     console.error("Dashboard Analytics Error:", error)

@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react"
 import Link from "next/link"
 import OrderDrawer from "@/components/OrderDrawer"
+import { RFM_SEGMENT_DEFINITIONS, RFMSegmentKey } from "@/lib/rfm"
 import { jsPDF } from "jspdf"
 import autoTable from "jspdf-autotable"
 import {
@@ -195,11 +196,39 @@ export default function AnalyticsDashboard() {
   // Search & Filter States for Action Tables
   const [customerSearch, setCustomerSearch] = useState("")
   const [customerSegmentFilter, setCustomerSegmentFilter] = useState("ALL")
+  const [customerRfmFilter, setCustomerRfmFilter] = useState("ALL")
   const [productSearch, setProductSearch] = useState("")
   const [productCategoryFilter, setProductCategoryFilter] = useState("ALL")
   const [productSortBy, setProductSortBy] = useState<"revenue" | "units" | "growth" | "margin">("revenue")
   const [inventorySearch, setInventorySearch] = useState("")
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState("ALL")
+
+  // Global Analytics Slicers / Filters (Above Analytics Content)
+  const [orderType, setOrderType] = useState("ALL")
+  const [categoryId, setCategoryId] = useState("ALL")
+  const [itemId, setItemId] = useState("ALL")
+  const [channel, setChannel] = useState("ALL")
+  const [paymentMethod, setPaymentMethod] = useState("ALL")
+  const [customerType, setCustomerType] = useState("ALL")
+
+  const hasActiveFilters =
+    range !== "30DAYS" ||
+    orderType !== "ALL" ||
+    categoryId !== "ALL" ||
+    itemId !== "ALL" ||
+    channel !== "ALL" ||
+    paymentMethod !== "ALL" ||
+    customerType !== "ALL"
+
+  const resetGlobalFilters = () => {
+    setRange("30DAYS")
+    setOrderType("ALL")
+    setCategoryId("ALL")
+    setItemId("ALL")
+    setChannel("ALL")
+    setPaymentMethod("ALL")
+    setCustomerType("ALL")
+  }
 
   // Fetch unified Analytics API
   const fetchAnalytics = async () => {
@@ -209,6 +238,13 @@ export default function AnalyticsDashboard() {
       if (range === "CUSTOM") {
         url += `&startDate=${startDate}&endDate=${endDate}`
       }
+      if (orderType !== "ALL") url += `&orderType=${encodeURIComponent(orderType)}`
+      if (categoryId !== "ALL") url += `&categoryId=${encodeURIComponent(categoryId)}`
+      if (itemId !== "ALL") url += `&itemId=${encodeURIComponent(itemId)}`
+      if (channel !== "ALL") url += `&channel=${encodeURIComponent(channel)}`
+      if (paymentMethod !== "ALL") url += `&paymentMethod=${encodeURIComponent(paymentMethod)}`
+      if (customerType !== "ALL") url += `&customerType=${encodeURIComponent(customerType)}`
+
       const res = await fetch(url)
       if (res.ok) {
         const json = await res.json()
@@ -223,7 +259,7 @@ export default function AnalyticsDashboard() {
 
   useEffect(() => {
     fetchAnalytics()
-  }, [range, startDate, endDate])
+  }, [range, startDate, endDate, orderType, categoryId, itemId, channel, paymentMethod, customerType])
 
   // OrderDrawer Status Update Handler
   const handleStatusUpdate = async (orderId: string, newStatus: string, reason?: string) => {
@@ -329,8 +365,13 @@ export default function AnalyticsDashboard() {
     if (customerSegmentFilter !== "ALL") {
       list = list.filter((c) => c.segment === customerSegmentFilter)
     }
+    if (customerRfmFilter !== "ALL") {
+      list = list.filter(
+        (c) => c.rfmSegmentKey === customerRfmFilter || c.rfmSegment === customerRfmFilter
+      )
+    }
     return list
-  }, [data, customerSearch, customerSegmentFilter])
+  }, [data, customerSearch, customerSegmentFilter, customerRfmFilter])
 
   // Filtered Product Action Table
   const filteredProductTable = useMemo(() => {
@@ -635,6 +676,209 @@ export default function AnalyticsDashboard() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ─────────────────────────────────────────────────────────────
+          GLOBAL ANALYTICS FILTERS & SLICERS (ABOVE ANALYTICS CONTENT)
+          Layout: Date | Order Type | Category | Item | Sales Channel | Payment Method | Customer Type
+      ───────────────────────────────────────────────────────────── */}
+      <div className="bg-white p-4.5 rounded-2xl border border-slate-200/90 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <span className="text-sm">🎛️</span>
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Global Analytics Slicers
+              </h2>
+              <p className="text-[11px] text-slate-400">
+                Synchronized across all Executive KPIs, Trend Charts, Action Tables, Customer Cohorts, and Inventory.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {hasActiveFilters && (
+              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">
+                Filters Active
+              </span>
+            )}
+            <button
+              onClick={resetGlobalFilters}
+              disabled={!hasActiveFilters}
+              className="text-xs text-slate-500 hover:text-indigo-600 disabled:opacity-40 disabled:hover:text-slate-500 font-semibold transition-colors flex items-center gap-1"
+            >
+              <span>✕</span>
+              <span>Reset All Slicers</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Slicers Row: Date | Order Type | Category | Item | Sales Channel | Payment Method | Customer Type */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5 items-end">
+          {/* 1. Date */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>📅</span>
+              <span>Date</span>
+            </label>
+            <select
+              value={range}
+              onChange={(e) => setRange(e.target.value)}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="TODAY">Today</option>
+              <option value="7DAYS">Last 7 Days</option>
+              <option value="30DAYS">Last 30 Days</option>
+              <option value="THIS_MONTH">This Month</option>
+              <option value="CUSTOM">Custom Range</option>
+            </select>
+          </div>
+
+          {/* 2. Order Type */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>🏷️</span>
+              <span>Order Type</span>
+            </label>
+            <select
+              value={orderType}
+              onChange={(e) => setOrderType(e.target.value)}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="ALL">All Order Types</option>
+              {data?.filterOptions?.orderTypes?.map((t: string) => (
+                <option key={t} value={t}>
+                  {t.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Category */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>🍽️</span>
+              <span>Category</span>
+            </label>
+            <select
+              value={categoryId}
+              onChange={(e) => {
+                setCategoryId(e.target.value)
+                setItemId("ALL")
+              }}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="ALL">All Categories</option>
+              {data?.filterOptions?.categories?.map((c: any) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 4. Item */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>🍲</span>
+              <span>Item</span>
+            </label>
+            <select
+              value={itemId}
+              onChange={(e) => setItemId(e.target.value)}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="ALL">All Items</option>
+              {(data?.filterOptions?.items || [])
+                .filter((item: any) => categoryId === "ALL" || item.categoryId === categoryId)
+                .map((item: any) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          {/* 5. Sales Channel */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>📱</span>
+              <span>Sales Channel</span>
+            </label>
+            <select
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="ALL">All Channels</option>
+              {data?.filterOptions?.channels?.map((ch: string) => (
+                <option key={ch} value={ch}>
+                  {ch.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 6. Payment Method */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>💳</span>
+              <span>Payment Method</span>
+            </label>
+            <select
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value)}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="ALL">All Payments</option>
+              {data?.filterOptions?.paymentMethods?.map((pm: string) => (
+                <option key={pm} value={pm}>
+                  {pm.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 7. Customer Type */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <span>👥</span>
+              <span>Customer Type</span>
+            </label>
+            <select
+              value={customerType}
+              onChange={(e) => setCustomerType(e.target.value)}
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+            >
+              <option value="ALL">All Customers</option>
+              {data?.filterOptions?.customerTypes?.map((ct: any) => (
+                <option key={ct.id} value={ct.id}>
+                  {ct.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Custom Range Picker Drawer */}
+        {range === "CUSTOM" && (
+          <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-slate-600 font-semibold">Custom Date Range:</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="text-xs font-medium text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500"
+            />
+            <span className="text-slate-400 text-xs">to</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="text-xs font-medium text-slate-800 border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none focus:border-indigo-500"
+            />
+          </div>
+        )}
       </div>
 
       {/* ─────────────────────────────────────────────────────────────
@@ -1374,6 +1618,139 @@ export default function AnalyticsDashboard() {
           )}
 
           {/* ─────────────────────────────────────────────────────────
+              CUSTOMER RFM SEGMENTATION (RECENCY, FREQUENCY, MONETARY)
+              Scores: Recency (1-5), Frequency (1-5), Monetary (1-5) & Segments
+          ───────────────────────────────────────────────────────── */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🎯</span>
+                  <h3 className="text-sm font-bold text-slate-800 tracking-tight">
+                    Customer RFM Segmentation (Recency, Frequency, Monetary)
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Scientific customer value ranking across Recency (1-5), Frequency (1-5), and Monetary (1-5).
+                  Directly powers targeted marketing campaigns in Customer Offers.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/customers/offers"
+                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold text-xs rounded-xl border border-indigo-200/80 transition-all flex items-center gap-1.5"
+                >
+                  <span>📢</span>
+                  <span>Create RFM Campaign</span>
+                </Link>
+              </div>
+            </div>
+
+            {/* RFM Methodology Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="bg-emerald-50/60 border border-emerald-200/70 rounded-xl p-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-emerald-800">Recency (R: 1-5)</span>
+                  <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                    Visits Cadence
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-900 leading-snug">
+                  Days elapsed since customer's last order. R5 (≤14d), R4 (15-30d), R3 (31-60d), R2 (61-90d), R1 (&gt;90d).
+                </p>
+              </div>
+
+              <div className="bg-indigo-50/60 border border-indigo-200/70 rounded-xl p-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-indigo-800">Frequency (F: 1-5)</span>
+                  <span className="text-[10px] font-semibold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
+                    Order Volume
+                  </span>
+                </div>
+                <p className="text-[11px] text-indigo-900 leading-snug">
+                  Total completed orders placed. F5 (≥10 orders), F4 (6-9), F3 (3-5), F2 (2), F1 (1 order).
+                </p>
+              </div>
+
+              <div className="bg-amber-50/60 border border-amber-200/70 rounded-xl p-3.5">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-amber-800">Monetary (M: 1-5)</span>
+                  <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
+                    Revenue Spend
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-900 leading-snug">
+                  Quintile ranking of lifetime revenue spent by diner in your restaurant (M5 highest spenders).
+                </p>
+              </div>
+            </div>
+
+            {/* RFM Segment Distribution Grid */}
+            <div className="pt-1">
+              <div className="flex items-center justify-between mb-2.5">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  RFM Customer Segments & Targeted Actions
+                </span>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  {data?.customers?.rfm?.summary?.totalCustomers || 0} Total Diners Segmented
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                {Object.values(RFM_SEGMENT_DEFINITIONS).map((def) => {
+                  const dist = (data?.customers?.rfm?.distribution || []).find((d: any) => d.key === def.key)
+                  const count = dist?.count || 0
+                  const percent = dist?.percent || 0
+                  const isSelected = customerRfmFilter === def.key
+
+                  return (
+                    <div
+                      key={def.key}
+                      onClick={() => setCustomerRfmFilter(isSelected ? "ALL" : def.key)}
+                      className={`p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                        isSelected
+                          ? "ring-2 ring-indigo-500 bg-indigo-50/40 border-indigo-300"
+                          : "bg-slate-50/70 hover:bg-white hover:shadow-xs border-slate-200/80"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded border ${def.badgeBg} ${def.badgeText}`}
+                          >
+                            {def.label}
+                          </span>
+                          <span className="text-xs font-bold text-slate-800">
+                            {count} ({percent}%)
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 leading-snug mb-2">
+                          {def.description}
+                        </p>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200/60 mt-2 flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 text-[10px] truncate max-w-[120px]" title={def.action}>
+                          💡 {def.action}
+                        </span>
+                        <Link
+                          href={`/customers/offers?segment=RFM_${def.key}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-indigo-600 hover:text-indigo-800 font-semibold shrink-0"
+                          title="Target segment in Customer Offers"
+                        >
+                          Target →
+                        </Link>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* ─────────────────────────────────────────────────────────
               CUSTOMER ACTION TABLE (DECISION-ORIENTED)
           ───────────────────────────────────────────────────────── */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
@@ -1387,26 +1764,39 @@ export default function AnalyticsDashboard() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <input
                   type="text"
                   placeholder="Search diner name or phone..."
                   value={customerSearch}
                   onChange={(e) => setCustomerSearch(e.target.value)}
-                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 w-48 sm:w-56"
+                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 w-48 sm:w-52"
                 />
                 <select
                   value={customerSegmentFilter}
                   onChange={(e) => setCustomerSegmentFilter(e.target.value)}
                   className="px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-indigo-500 text-slate-700 bg-white"
                 >
-                  <option value="ALL">All Segments</option>
+                  <option value="ALL">All Segments (Legacy)</option>
                   <option value="HIGH_VALUE">High Value</option>
                   <option value="LOYAL">Loyal</option>
                   <option value="REGULAR">Regular</option>
                   <option value="NEW">New</option>
                   <option value="AT_RISK">At Risk</option>
                   <option value="CHURNED">Churned</option>
+                </select>
+
+                <select
+                  value={customerRfmFilter}
+                  onChange={(e) => setCustomerRfmFilter(e.target.value)}
+                  className="px-2.5 py-1.5 text-xs font-semibold border border-indigo-200 rounded-lg focus:outline-indigo-500 text-indigo-900 bg-indigo-50/50"
+                >
+                  <option value="ALL">All RFM Segments</option>
+                  {Object.values(RFM_SEGMENT_DEFINITIONS).map((def) => (
+                    <option key={def.key} value={def.key}>
+                      {def.label}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -1417,6 +1807,11 @@ export default function AnalyticsDashboard() {
                   <tr>
                     <th className="py-2.5 px-3">Customer</th>
                     <th className="py-2.5 px-3">Segment</th>
+                    <th className="py-2.5 px-3">RFM Segment</th>
+                    <th className="py-2.5 px-3">RFM Score</th>
+                    <th className="py-2.5 px-3">Recency (R)</th>
+                    <th className="py-2.5 px-3">Frequency (F)</th>
+                    <th className="py-2.5 px-3">Monetary (M)</th>
                     <th className="py-2.5 px-3">Period Rev</th>
                     <th className="py-2.5 px-3">Orders</th>
                     <th className="py-2.5 px-3">Last Order</th>
@@ -1451,6 +1846,43 @@ export default function AnalyticsDashboard() {
                           {c.segment}
                         </span>
                       </td>
+                      <td className="py-2 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            c.rfmSegmentKey && RFM_SEGMENT_DEFINITIONS[c.rfmSegmentKey as RFMSegmentKey]
+                              ? `${RFM_SEGMENT_DEFINITIONS[c.rfmSegmentKey as RFMSegmentKey].badgeBg} ${RFM_SEGMENT_DEFINITIONS[c.rfmSegmentKey as RFMSegmentKey].badgeText}`
+                              : "bg-slate-100 text-slate-700 border-slate-200"
+                          }`}
+                        >
+                          {c.rfmSegment || "Standard"}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        <span className="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                          {c.rfmScore || "---"}
+                        </span>
+                        <span className="text-[10px] text-slate-400 ml-1">
+                          ({c.rfmAverage || 0})
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-slate-700">
+                        <span className="font-medium">{c.recencyDays ?? c.daysSinceLastOrder ?? 0}d</span>
+                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1 py-0.5 rounded ml-1">
+                          R{c.recencyScore ?? 1}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 text-slate-700">
+                        <span className="font-medium">{c.frequencyCount ?? c.lifetimeOrders ?? 0}</span>
+                        <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1 py-0.5 rounded ml-1">
+                          F{c.frequencyScore ?? 1}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 font-semibold text-slate-900">
+                        ₹{(c.monetarySpend ?? c.lifetimeSpend ?? 0).toLocaleString()}
+                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1 py-0.5 rounded ml-1 font-normal">
+                          M{c.monetaryScore ?? 1}
+                        </span>
+                      </td>
                       <td className="py-2 px-3 font-semibold text-slate-900">
                         ₹{c.periodRevenue.toLocaleString()}
                         <div className="text-[10px] text-slate-400 font-normal">
@@ -1481,13 +1913,26 @@ export default function AnalyticsDashboard() {
                         </span>
                       </td>
                       <td className="py-2 px-3">
-                        <span className="text-indigo-600 font-medium">{c.suggestedAction}</span>
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="text-indigo-600 font-medium truncate max-w-[140px]" title={c.suggestedAction}>
+                            {c.suggestedAction}
+                          </span>
+                          {c.rfmSegmentKey && (
+                            <Link
+                              href={`/customers/offers?segment=RFM_${c.rfmSegmentKey}`}
+                              className="px-1.5 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] rounded border border-indigo-200 shrink-0"
+                              title="Create offer targeting this customer's RFM segment"
+                            >
+                              Offer ↗
+                            </Link>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
                   {filteredCustomerTable.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="py-6 text-center text-slate-400">
+                      <td colSpan={13} className="py-6 text-center text-slate-400">
                         No customers found matching search criteria.
                       </td>
                     </tr>

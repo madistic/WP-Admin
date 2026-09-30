@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import OrderDrawer from "./OrderDrawer"
 import StatusBadge from "./StatusBadge"
+import { triggerOneClickReceiptPrint, triggerOneClickKotPrint } from "@/lib/printing"
 
 type OrderItem = {
   id: string
@@ -450,39 +451,58 @@ export default function OrderBoard() {
                       className="py-3.5 px-4 text-right"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {order.status === "NEW" && (
+                      <div className="flex items-center justify-end gap-1.5 flex-wrap">
                         <button
-                          onClick={() => updateStatus(order.id, "IN_PROCESS")}
-                          disabled={updatingOrderId !== null}
-                          className="px-3 py-1 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 transition-colors shadow-xs disabled:opacity-50"
+                          type="button"
+                          title="1-Click Print Receipt"
+                          onClick={() => triggerOneClickReceiptPrint(order as any)}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 transition-colors shadow-2xs"
                         >
-                          {updatingOrderId === order.id ? "Updating..." : "Accept"}
+                          🖨️ Bill
                         </button>
-                      )}
-
-                      {order.status === "IN_PROCESS" && (
                         <button
-                          onClick={() => updateStatus(order.id, "OUT_FOR_DELIVERY")}
-                          disabled={updatingOrderId !== null}
-                          className="px-3 py-1 bg-blue-600 text-white font-medium text-xs rounded-lg hover:bg-blue-700 transition-colors shadow-xs disabled:opacity-50"
+                          type="button"
+                          title="1-Click Print KOT to all connected kitchen printers"
+                          onClick={() => triggerOneClickKotPrint(order as any)}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold rounded-lg border border-amber-200 transition-colors shadow-2xs"
                         >
-                          {updatingOrderId === order.id ? "Updating..." : "Dispatch"}
+                          🍳 KOT
                         </button>
-                      )}
 
-                      {order.status === "OUT_FOR_DELIVERY" && (
-                        <button
-                          onClick={() => updateStatus(order.id, "DELIVERED")}
-                          disabled={updatingOrderId !== null}
-                          className="px-3 py-1 bg-emerald-600 text-white font-medium text-xs rounded-lg hover:bg-emerald-700 transition-colors shadow-xs disabled:opacity-50"
-                        >
-                          {updatingOrderId === order.id ? "Updating..." : "Deliver"}
-                        </button>
-                      )}
+                        {order.status === "NEW" && (
+                          <button
+                            onClick={() => updateStatus(order.id, "IN_PROCESS")}
+                            disabled={updatingOrderId !== null}
+                            className="px-3 py-1 bg-indigo-600 text-white font-medium text-xs rounded-lg hover:bg-indigo-700 transition-colors shadow-xs disabled:opacity-50"
+                          >
+                            {updatingOrderId === order.id ? "Updating..." : "Accept"}
+                          </button>
+                        )}
 
-                      {(order.status === "DELIVERED" || order.status === "CANCELLED" || order.status === "REJECTED") && (
-                        <span className="text-xs font-normal text-slate-400">Completed</span>
-                      )}
+                        {order.status === "IN_PROCESS" && (
+                          <button
+                            onClick={() => updateStatus(order.id, "OUT_FOR_DELIVERY")}
+                            disabled={updatingOrderId !== null}
+                            className="px-3 py-1 bg-blue-600 text-white font-medium text-xs rounded-lg hover:bg-blue-700 transition-colors shadow-xs disabled:opacity-50"
+                          >
+                            {updatingOrderId === order.id ? "Updating..." : "Dispatch"}
+                          </button>
+                        )}
+
+                        {order.status === "OUT_FOR_DELIVERY" && (
+                          <button
+                            onClick={() => updateStatus(order.id, "DELIVERED")}
+                            disabled={updatingOrderId !== null}
+                            className="px-3 py-1 bg-emerald-600 text-white font-medium text-xs rounded-lg hover:bg-emerald-700 transition-colors shadow-xs disabled:opacity-50"
+                          >
+                            {updatingOrderId === order.id ? "Updating..." : "Deliver"}
+                          </button>
+                        )}
+
+                        {(order.status === "DELIVERED" || order.status === "CANCELLED" || order.status === "REJECTED") && (
+                          <span className="text-xs font-normal text-slate-400">Completed</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

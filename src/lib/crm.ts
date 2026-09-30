@@ -1,9 +1,18 @@
 import prisma from "@/lib/prisma"
+import { calculateRFM, RFMSegmentKey } from "@/lib/rfm"
 
-export type CustomerSegment = "ALL" | "NEW" | "REGULAR" | "LOYAL" | "INACTIVE" | "NEVER_PURCHASED"
+export type CustomerSegment =
+  | "ALL"
+  | "NEW"
+  | "REGULAR"
+  | "LOYAL"
+  | "INACTIVE"
+  | "NEVER_PURCHASED"
+  | `RFM_${RFMSegmentKey}`
+  | RFMSegmentKey
 
 export interface CRMFilterOptions {
-  segment?: CustomerSegment | "ALL"
+  segment?: CustomerSegment | "ALL" | string
   branchId?: string
   lastPurchaseBefore?: Date
   lastPurchaseAfter?: Date
@@ -95,7 +104,72 @@ export async function getCustomersForCampaign(restaurantId: string, filters: CRM
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
-  // Segment logic based on purchase history
+  // RFM Segmentation filtering using the shared calculation engine
+  const isRfmFilter = Boolean(
+    filters.segment &&
+      (filters.segment.startsWith("RFM_") ||
+        filters.segment in {
+          CHAMPIONS: 1,
+          LOYAL_CUSTOMERS: 1,
+          POTENTIAL_LOYALISTS: 1,
+          NEW_CUSTOMERS: 1,
+          PROMISING: 1,
+          NEED_ATTENTION: 1,
+          ABOUT_TO_SLEEP: 1,
+          AT_RISK: 1,
+          CANT_LOSE_THEM: 1,
+          LOW_MONETARY: 1,
+          LOST: 1,
+        })
+  )
+
+  if (isRfmFilter) {
+    const targetKey = (filters.segment || "").replace(/^RFM_/, "") as RFMSegmentKey
+
+    const customersWithOrders = await prisma.customer.findMany({
+      where: {
+        restaurant_id: restaurantId,
+        is_active: true,
+        whatsapp_number: { not: null },
+        ...(filters.branchId ? { branch_id: filters.branchId } : {}),
+      },
+      include: {
+        orders: {
+          where: { status: { in: ["DELIVERED"] } },
+          select: { id: true, total: true, created_at: true },
+          orderBy: { created_at: "desc" },
+        },
+      },
+    })
+
+    const rfmInput = customersWithOrders.map((c) => ({
+      id: c.id,
+      name: c.name,
+      phone: c.whatsapp_number || c.phone,
+      orders: c.orders,
+      ordersCount: c.orders.length,
+      totalSpend: c.orders.reduce((sum, o) => sum + o.total, 0),
+      lastOrder: c.orders.length > 0 ? c.orders[0].created_at : null,
+      firstOrder: c.orders.length > 0 ? c.orders[c.orders.length - 1].created_at : null,
+    }))
+
+    const { customerScoreMap } = calculateRFM(rfmInput)
+
+    const matchedCustomers: any[] = []
+    for (const c of customersWithOrders) {
+      const rfm = customerScoreMap.get(c.id)
+      if (rfm && rfm.rfmSegmentKey === targetKey) {
+        matchedCustomers.push({
+          ...c,
+          rfm,
+        })
+      }
+    }
+
+    return matchedCustomers
+  }
+
+  // Segment logic based on purchase history (existing legacy segments)
   if (filters.segment && filters.segment !== "ALL") {
     switch (filters.segment) {
       case "NEW":

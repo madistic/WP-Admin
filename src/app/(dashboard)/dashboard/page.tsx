@@ -599,6 +599,19 @@ export default function AnalyticsDashboard() {
     ],
   }
 
+  const getFilterOptionId = (opt: any): string => {
+    if (!opt) return ""
+    if (typeof opt === "string") return opt
+    return String(opt.id ?? "")
+  }
+
+  const getFilterOptionLabel = (opt: any): string => {
+    if (!opt) return ""
+    if (typeof opt === "string") return opt.replace(/_/g, " ")
+    const label = opt.label || opt.name || opt.id || ""
+    return typeof label === "string" ? label.replace(/_/g, " ") : String(label)
+  }
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16">
       {/* ─────────────────────────────────────────────────────────────
@@ -746,11 +759,16 @@ export default function AnalyticsDashboard() {
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
             >
               <option value="ALL">All Order Types</option>
-              {data?.filterOptions?.orderTypes?.map((t: string) => (
-                <option key={t} value={t}>
-                  {t.replace(/_/g, " ")}
-                </option>
-              ))}
+              {data?.filterOptions?.orderTypes
+                ?.filter((t: any) => getFilterOptionId(t) !== "ALL")
+                .map((t: any, idx: number) => {
+                  const val = getFilterOptionId(t)
+                  return (
+                    <option key={val || idx} value={val}>
+                      {getFilterOptionLabel(t)}
+                    </option>
+                  )
+                })}
             </select>
           </div>
 
@@ -769,11 +787,16 @@ export default function AnalyticsDashboard() {
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
             >
               <option value="ALL">All Categories</option>
-              {data?.filterOptions?.categories?.map((c: any) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
+              {data?.filterOptions?.categories
+                ?.filter((c: any) => getFilterOptionId(c) !== "ALL")
+                .map((c: any, idx: number) => {
+                  const val = getFilterOptionId(c)
+                  return (
+                    <option key={val || idx} value={val}>
+                      {getFilterOptionLabel(c)}
+                    </option>
+                  )
+                })}
             </select>
           </div>
 
@@ -790,12 +813,19 @@ export default function AnalyticsDashboard() {
             >
               <option value="ALL">All Items</option>
               {(data?.filterOptions?.items || [])
-                .filter((item: any) => categoryId === "ALL" || item.categoryId === categoryId)
-                .map((item: any) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
+                .filter(
+                  (item: any) =>
+                    getFilterOptionId(item) !== "ALL" &&
+                    (categoryId === "ALL" || item.categoryId === categoryId)
+                )
+                .map((item: any, idx: number) => {
+                  const val = getFilterOptionId(item)
+                  return (
+                    <option key={val || idx} value={val}>
+                      {getFilterOptionLabel(item)}
+                    </option>
+                  )
+                })}
             </select>
           </div>
 
@@ -811,11 +841,16 @@ export default function AnalyticsDashboard() {
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
             >
               <option value="ALL">All Channels</option>
-              {data?.filterOptions?.channels?.map((ch: string) => (
-                <option key={ch} value={ch}>
-                  {ch.replace(/_/g, " ")}
-                </option>
-              ))}
+              {data?.filterOptions?.channels
+                ?.filter((ch: any) => getFilterOptionId(ch) !== "ALL")
+                .map((ch: any, idx: number) => {
+                  const val = getFilterOptionId(ch)
+                  return (
+                    <option key={val || idx} value={val}>
+                      {getFilterOptionLabel(ch)}
+                    </option>
+                  )
+                })}
             </select>
           </div>
 
@@ -831,11 +866,16 @@ export default function AnalyticsDashboard() {
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
             >
               <option value="ALL">All Payments</option>
-              {data?.filterOptions?.paymentMethods?.map((pm: string) => (
-                <option key={pm} value={pm}>
-                  {pm.replace(/_/g, " ")}
-                </option>
-              ))}
+              {data?.filterOptions?.paymentMethods
+                ?.filter((pm: any) => getFilterOptionId(pm) !== "ALL")
+                .map((pm: any, idx: number) => {
+                  const val = getFilterOptionId(pm)
+                  return (
+                    <option key={val || idx} value={val}>
+                      {getFilterOptionLabel(pm)}
+                    </option>
+                  )
+                })}
             </select>
           </div>
 
@@ -851,11 +891,16 @@ export default function AnalyticsDashboard() {
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 outline-none focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
             >
               <option value="ALL">All Customers</option>
-              {data?.filterOptions?.customerTypes?.map((ct: any) => (
-                <option key={ct.id} value={ct.id}>
-                  {ct.name}
-                </option>
-              ))}
+              {data?.filterOptions?.customerTypes
+                ?.filter((ct: any) => getFilterOptionId(ct) !== "ALL")
+                .map((ct: any, idx: number) => {
+                  const val = getFilterOptionId(ct)
+                  return (
+                    <option key={val || idx} value={val}>
+                      {getFilterOptionLabel(ct)}
+                    </option>
+                  )
+                })}
             </select>
           </div>
         </div>

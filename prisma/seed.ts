@@ -3,6 +3,11 @@ import { PrismaPg } from '@prisma/adapter-pg'
 import { Pool } from 'pg'
 import bcrypt from 'bcryptjs'
 
+if (process.env.NODE_ENV === 'production') {
+  console.error('Refusing to run database seed in production.')
+  process.exit(1)
+}
+
 const connectionString = process.env.DATABASE_URL
 
 const pool = new Pool({
@@ -14,6 +19,11 @@ const adapter = new PrismaPg(pool)
 const prisma = new PrismaClient({ adapter })
 
 async function main() {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Refusing to run database seed in production.')
+    process.exit(1)
+  }
+
   console.log('Seeding database...')
 
   // Clean up existing data (for development/reset purposes)
@@ -60,13 +70,15 @@ async function main() {
     },
   })
 
-  const passwordHash = await bcrypt.hash('password123', 10)
+  const seedEmail = process.env.SEED_OWNER_EMAIL || 'staging-owner@example.com'
+  const seedPassword = process.env.SEED_OWNER_PASSWORD || 'StagingDefault#2026!'
+  const passwordHash = await bcrypt.hash(seedPassword, 10)
   const owner = await prisma.user.create({
     data: {
       restaurant_id: restaurant.id,
       branch_id: defaultBranch.id,
       name: 'Restaurant Owner',
-      email: 'admin@spiceroute.com',
+      email: seedEmail,
       phone: '9999999999',
       password_hash: passwordHash,
       role: 'SUPER_ADMIN',
@@ -199,9 +211,8 @@ async function main() {
   })
 
   console.log(`Demo Restaurant Created: ${restaurant.name}`)
-  console.log(`Owner Login Email: admin@spiceroute.com | Password: password123`)
   console.log(`Sample Order created: ${order.order_number}`)
-  console.log('Seeding finished.')
+  console.log('Seeding finished successfully.')
 }
 
 main()

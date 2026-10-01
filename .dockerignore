@@ -1,0 +1,61 @@
+# Git
+.git
+.gitignore
+
+# Environment files
+.env
+.env*.local
+.env.development
+.env.test
+.env.production
+.env.staging
+!.env.example
+
+# Dependencies and cache
+node_modules
+.npm
+.next
+.turbo
+dist
+build
+coverage
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database dumps and archives
+restpro_final.dump
+*.dump
+*.sql.gz
+*.zip
+*.tar
+*.tar.gz
+
+# Local developer scratch scripts and test files
+apply_menu_migration.ts
+apply_migration.ts
+audit_users.js
+check_users.js
+clean_duplicates.js
+cleanup_constraints.js
+fix_password.js
+new_migration.sql
+test_auth.js
+test_authorize.ts
+test_hash.js
+test_loyalty.ts
+test_routes.ts
+.tmp-check.js
+test_prisma_read.js
+
+# IDE and agent metadata
+.agents
+.claude
+.windsurf
+.idea
+.vscode
+scratch
+*.tsbuildinfo

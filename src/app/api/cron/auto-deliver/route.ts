@@ -2,14 +2,21 @@ import { NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { notificationService } from "@/lib/notifications"
 
+export const dynamic = "force-dynamic"
+
 // This can be triggered by Vercel Cron or any other external scheduler (e.g. GitHub Actions, AWS EventBridge)
 export async function GET(request: Request) {
   try {
-    // Optional: Add a simple secret check to protect this endpoint
-    // const authHeader = request.headers.get('authorization')
-    // if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    //   return new Response('Unauthorized', { status: 401 })
-    // }
+    const cronSecret = process.env.CRON_SECRET
+    if (!cronSecret) {
+      console.error("[Cron] CRON_SECRET is not configured on server.")
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+
+    const authHeader = request.headers.get("authorization")
+    if (!authHeader || authHeader !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
 
     const minutesToWait = parseInt(process.env.AUTO_DELIVER_AFTER_MINUTES || "40", 10)
     
@@ -79,7 +86,7 @@ export async function GET(request: Request) {
       message: `Auto-delivered ${processedOrders.length} orders`,
       orderIds: processedOrders.map(o => o.order_number)
     })
-  } catch (error: any) {
+  } catch (error) {
     console.error("Auto Deliver Cron Error:", error)
     return NextResponse.json(
       { error: "Internal Server Error" },

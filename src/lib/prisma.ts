@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { Pool } from 'pg'
+import { Pool, PoolConfig } from 'pg'
 
 const prismaClientSingleton = () => {
   const connectionString = process.env.DATABASE_URL
@@ -8,8 +8,11 @@ const prismaClientSingleton = () => {
   const isSslExplicit = connectionString?.includes('sslmode=require') || connectionString?.includes('sslmode=prefer') || connectionString?.includes('ssl=true')
   const useSsl = isSslExplicit || !isLocal
 
-  const poolOptions: any = {
+  const poolOptions: PoolConfig = {
     connectionString: connectionString || undefined,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
   }
 
   if (useSsl) {

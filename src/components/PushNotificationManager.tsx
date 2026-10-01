@@ -1,8 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
-
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY
+import { useEffect, useState, useCallback, useRef } from "react"
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4)
@@ -28,6 +26,28 @@ type PermissionState = "default" | "granted" | "denied" | "unsupported"
 export default function PushNotificationManager() {
   const [permissionState, setPermissionState] = useState<PermissionState>("default")
   const [dismissed, setDismissed] = useState(false)
+  const [vapidPublicKey, setVapidPublicKey] = useState<string | null>(null)
+  const vapidKeyRef = useRef<string | null>(null)
+
+  /**
+   * Fetches runtime VAPID public key from the server
+   */
+  const fetchVapidKey = useCallback(async (): Promise<string | null> => {
+    if (vapidKeyRef.current) return vapidKeyRef.current
+    try {
+      const res = await fetch("/api/config/vapid")
+      if (res.ok) {
+        const data = await res.json()
+        if (data.publicKey) {
+          vapidKeyRef.current = data.publicKey
+          return data.publicKey
+        }
+      }
+    } catch (err) {
+      console.error("[PushManager] Failed to fetch VAPID public key:", err)
+    }
+    return null
+  }, [])
 
   /**
    * Sends the push subscription to the server (upsert — safe to call multiple times).
@@ -48,21 +68,9 @@ export default function PushNotificationManager() {
   }, [])
 
   /**
-   * Subscribes the browser to push notifications.
-   * Reuses an existing subscription if one already exists — prevents duplicates.
+   * Subscribes the browser to push notifications with the provided key.
    */
-  const subscribe = useCallback(async () => {
-    if (!VAPID_PUBLIC_KEY) {
-      // This means VAPID_PUBLIC_KEY was not set at build time.
-      // On Vercel: Settings → Environment Variables → add VAPID_PUBLIC_KEY, then redeploy.
-      console.warn(
-        "[PushManager] VAPID_PUBLIC_KEY not set.\n" +
-          "For Vercel: Add VAPID_PUBLIC_KEY to your project environment variables and redeploy.\n" +
-          "For local dev: Ensure it is in .env and restart the dev server."
-      )
-      return
-    }
-
+  const subscribeWithKey = useCallback(async (key: string) => {
     try {
       const reg = await navigator.serviceWorker.ready
       let subscription = await reg.pushManager.getSubscription()
@@ -70,7 +78,7 @@ export default function PushNotificationManager() {
       if (!subscription) {
         subscription = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+          applicationServerKey: urlBase64ToUint8Array(key),
         })
         console.log("[PushManager] New subscription created.")
       } else {
@@ -83,6 +91,20 @@ export default function PushNotificationManager() {
       console.error("[PushManager] Failed to subscribe:", err)
     }
   }, [sendSubscriptionToServer])
+
+  /**
+   * Subscribes the browser to push notifications.
+   * Reuses an existing subscription if one already exists — prevents duplicates.
+   */
+  const subscribe = useCallback(async () => {
+    const key = await fetchVapidKey()
+    if (!key) {
+      console.warn("[PushManager] VAPID public key not configured on server.")
+      return
+    }
+    setVapidPublicKey(key)
+    await subscribeWithKey(key)
+  }, [fetchVapidKey, subscribeWithKey])
 
   /**
    * Called when user clicks "Enable" on the banner.
@@ -106,17 +128,22 @@ export default function PushNotificationManager() {
 
   useEffect(() => {
     if (!("Notification" in window) || !("serviceWorker" in navigator)) {
-      setPermissionState("unsupported")
+      queueMicrotask(() => setPermissionState("unsupported"))
       return
     }
 
     const currentPerm = Notification.permission as PermissionState
-    setPermissionState(currentPerm)
+    queueMicrotask(() => {
+      setPermissionState(currentPerm)
+      if (localStorage.getItem("push_banner_dismissed") === "true") {
+        setDismissed(true)
+      }
+    })
 
-    // Check persisted banner-dismissed state
-    if (localStorage.getItem("push_banner_dismissed") === "true") {
-      setDismissed(true)
-    }
+    // Proactively fetch VAPID key to determine banner visibility
+    fetchVapidKey().then((key) => {
+      if (key) setVapidPublicKey(key)
+    })
 
     // Register service worker
     navigator.serviceWorker
@@ -130,7 +157,7 @@ export default function PushNotificationManager() {
         }
       })
       .catch((err) => console.error("[PushManager] SW registration failed:", err))
-  }, [subscribe])
+  }, [subscribe, fetchVapidKey])
 
   const handleDismiss = () => {
     setDismissed(true)
@@ -140,13 +167,13 @@ export default function PushNotificationManager() {
   // Do not render the banner if:
   // - permission already granted / denied / unsupported
   // - user dismissed the banner
-  // - VAPID key not configured (dev mode without env var)
+  // - VAPID key not loaded or not configured
   if (
     permissionState === "granted" ||
     permissionState === "unsupported" ||
     permissionState === "denied" ||
     dismissed ||
-    !VAPID_PUBLIC_KEY
+    !vapidPublicKey
   ) {
     return null
   }

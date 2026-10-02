@@ -4,13 +4,15 @@ import bcrypt from 'bcryptjs';
 
 async function testAuthorize() {
   try {
+    const testEmail = process.env.TEST_EMAIL || 'test@example.com';
+    const testPassword = process.env.TEST_PASSWORD || '';
     const user = await prisma.user.findUnique({
-      where: { email: 'admin@spiceroute.com' }
+      where: { email: testEmail }
     });
     console.log("User fetched:", user ? "yes" : "no", user?.is_active);
-    if (user) {
-      const isValid = await bcrypt.compare('admin', user.password_hash);
-      console.log("Is valid with 'admin':", isValid);
+    if (user && testPassword) {
+      const isValid = await bcrypt.compare(testPassword, user.password_hash);
+      console.log("Is valid:", isValid);
     }
   } catch (e) {
     console.error("Authorize error:", e);

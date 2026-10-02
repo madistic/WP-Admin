@@ -37,8 +37,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Install minimal runtime shared libraries
-RUN apk add --no-cache libc6-compat
+# Install minimal runtime shared libraries & CA certificates
+RUN apk add --no-cache libc6-compat ca-certificates
 
 # Security: Run as dedicated non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -54,6 +54,11 @@ RUN mkdir .next && chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/prisma/schema.prisma ./prisma/schema.prisma
+COPY --from=builder --chown=nextjs:nodejs /app/certs ./certs
+
+# Configure Node and PostgreSQL CA trust
+ENV NODE_EXTRA_CA_CERTS=/app/certs/global-bundle.pem
+ENV PGSSLROOTCERT=/app/certs/global-bundle.pem
 
 USER nextjs
 

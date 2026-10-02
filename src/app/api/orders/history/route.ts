@@ -64,6 +64,21 @@ export async function GET(request: Request) {
       })
     }
 
+    const itemId = searchParams.get("itemId") || searchParams.get("item_id")
+    if (itemId) {
+      (where.AND as Prisma.OrderWhereInput[]).push({
+        items: {
+          some: {
+            OR: [
+              { menu_item_id: itemId },
+              { menuItem: { id: itemId } },
+              { menuItem: { ingredients: { some: { inventory_item_id: itemId } } } },
+            ],
+          },
+        },
+      })
+    }
+
     const orders = await prisma.order.findMany({
       where,
       include: {

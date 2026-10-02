@@ -1,0 +1,5 @@
+﻿FROM 667819981546.dkr.ecr.ap-south-1.amazonaws.com/restroconnect-restaurant:step11-5-v4
+COPY global-bundle.pem /app/certs/global-bundle.pem
+COPY restpro_db_render_backup_2026-10-02T07-44-09-773Z.backup /app/backup.dump
+COPY run_cutover.js /app/run_cutover.js
+CMD ["node", "/app/run_cutover.js"]

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import { Prisma } from "@prisma/client"
 import { requireAdminApi } from "@/lib/role-check"
+import { calculateArithmeticAveragePurchaseUnitCost, syncMenuItemsAvailabilityForInventoryItems } from "@/lib/inventory/service"
 
 export async function GET(
   request: Request,
@@ -55,7 +56,20 @@ export async function GET(
 
     const qty = Number(item.quantity)
     const min = Number(item.minimum_stock)
-    const cost = item.cost_per_unit ? Number(item.cost_per_unit) : null
+    
+    // Arithmetic average of ACTIVE purchase ledger entries only
+    const activePurchases = await prisma.inventoryTransaction.findMany({
+      where: {
+        inventory_item_id: id,
+        type: "PURCHASE",
+        unit_cost: { not: null, gt: 0 },
+      },
+      select: {
+        unit_cost: true,
+        reason: true,
+      },
+    })
+    const cost = calculateArithmeticAveragePurchaseUnitCost(activePurchases) ?? (item.cost_per_unit ? Number(item.cost_per_unit) : null)
 
     return NextResponse.json({
       id: item.id,
@@ -150,6 +164,9 @@ export async function PUT(
       data: updateData,
     })
 
+    // Automatically sync menu item availability if item or active status changed
+    await syncMenuItemsAvailabilityForInventoryItems(prisma, [id])
+
     return NextResponse.json({
       ...updated,
       quantity: Number(updated.quantity),
@@ -199,6 +216,7 @@ export async function DELETE(
         where: { id },
         data: { is_active: false },
       })
+      await syncMenuItemsAvailabilityForInventoryItems(prisma, [id])
       return NextResponse.json({ success: true, deactivated: true, message: "Item has history; marked as inactive." })
     }
 
@@ -206,6 +224,7 @@ export async function DELETE(
     await prisma.inventoryItem.delete({
       where: { id },
     })
+    await syncMenuItemsAvailabilityForInventoryItems(prisma, [id])
 
     return NextResponse.json({ success: true, deleted: true })
   } catch (error: any) {

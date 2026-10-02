@@ -6,7 +6,11 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY!
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@restroconnect.app"
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+  } catch (err: any) {
+    console.warn("[WebPush] Failed to initialize VAPID details:", err?.message || err)
+  }
 }
 
 export interface PushPayload {

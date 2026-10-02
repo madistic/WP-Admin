@@ -8,7 +8,7 @@ import prisma from "@/lib/prisma"
 import { normalizePhoneNumber } from "@/lib/phone"
 import { getDefaultBranchId } from "@/lib/branch-scope"
 
-import { deductInventoryForOrder } from "@/lib/inventory/service"
+import { deductInventoryForOrder, syncAllMenuItemsAvailability } from "@/lib/inventory/service"
 
 type PosItem = { menu_item_id: string; quantity: number; variant_id?: string; addon_ids?: string[]; description?: string }
 
@@ -30,6 +30,9 @@ export async function createTestOrder(payload: { restaurant_id: string; order_ty
       if (!restaurant) throw new Error("Restaurant not found")
       const phone = normalizePhoneNumber(payload.customer_phone!)
       const customer = await tx.customer.upsert({ where: { restaurant_id_branch_id_phone: { restaurant_id: payload.restaurant_id, branch_id: branchId, phone } }, update: payload.customer_name?.trim() ? { name: payload.customer_name.trim() } : {}, create: { restaurant_id: payload.restaurant_id, branch_id: branchId, phone, name: payload.customer_name?.trim() || "Walk-in Customer" } })
+
+      // Synchronize availability of recipe-linked items with real-time ingredient stock
+      await syncAllMenuItemsAvailability(tx, payload.restaurant_id)
 
       const orderItems = []
       let subtotal = 0
@@ -155,6 +158,9 @@ export async function appendItemsToPosOrder(payload: { orderId: string; items: P
       })
       
       if (!order) throw new Error("Active POS session not found or already completed.")
+
+      // Synchronize availability of recipe-linked items with real-time ingredient stock
+      await syncAllMenuItemsAvailability(tx, session.user.restaurant_id)
 
       const orderItems = []
       let additionalSubtotal = 0

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
 import { Prisma } from "@prisma/client"
 import { requireAdminApi } from "@/lib/role-check"
+import { calculateArithmeticAveragePurchaseUnitCost } from "@/lib/inventory/service"
 
 export async function GET(request: Request) {
   try {
@@ -62,13 +63,41 @@ export async function GET(request: Request) {
       filteredItems = items.filter((item) => Number(item.quantity) <= 0)
     }
 
+    // Fetch active purchase ledger transactions to calculate arithmetic average unit cost
+    const itemIds = filteredItems.map((i) => i.id)
+    const purchaseTransactions = itemIds.length > 0
+      ? await prisma.inventoryTransaction.findMany({
+          where: {
+            restaurant_id: restaurantId,
+            inventory_item_id: { in: itemIds },
+            type: "PURCHASE",
+            unit_cost: { not: null, gt: 0 },
+          },
+          select: {
+            inventory_item_id: true,
+            unit_cost: true,
+            reason: true,
+          },
+        })
+      : []
+
+    const purchaseMap = new Map<string, Array<{ unit_cost: Prisma.Decimal | number | null; reason?: string | null }>>()
+    for (const tx of purchaseTransactions) {
+      const list = purchaseMap.get(tx.inventory_item_id) || []
+      list.push(tx)
+      purchaseMap.set(tx.inventory_item_id, list)
+    }
+
     // Format Decimal values for clean JSON response
     const formatted = filteredItems.map((item) => {
       const qty = Number(item.quantity)
       const minStock = Number(item.minimum_stock)
       const reorderLevel = Number(item.reorder_level)
-      const unitCost = item.cost_per_unit ? Number(item.cost_per_unit) : null
-      const totalValue = unitCost ? qty * unitCost : null
+      
+      // Calculate Cost Per Unit from active purchase ledger entries using arithmetic average (sum / count)
+      const itemPurchases = purchaseMap.get(item.id) || []
+      const unitCost = calculateArithmeticAveragePurchaseUnitCost(itemPurchases) ?? (item.cost_per_unit ? Number(item.cost_per_unit) : null)
+      const totalValue = unitCost !== null ? qty * unitCost : null
 
       return {
         id: item.id,

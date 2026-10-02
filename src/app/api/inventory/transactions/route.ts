@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
-    const inventoryItemId = searchParams.get("inventory_item_id")
+    const inventoryItemId = searchParams.get("inventory_item_id") || searchParams.get("item_id") || searchParams.get("itemId")
     const type = searchParams.get("type") as InventoryTransactionType | null
     const branchId = searchParams.get("branch_id")
     const orderId = searchParams.get("order_id")
@@ -21,10 +21,24 @@ export async function GET(request: Request) {
     const restaurantId = session.user.restaurant_id
     const branchScope = session.user.branch_id ? { branch_id: session.user.branch_id } : branchId ? { branch_id: branchId } : {}
 
+    let itemFilterCondition: any = undefined
+    if (inventoryItemId) {
+      const menuIngredients = await prisma.menuItemIngredient.findMany({
+        where: { menu_item_id: inventoryItemId },
+        select: { inventory_item_id: true },
+      })
+      if (menuIngredients.length > 0) {
+        const itemIds = [inventoryItemId, ...menuIngredients.map((mi) => mi.inventory_item_id)]
+        itemFilterCondition = { in: itemIds }
+      } else {
+        itemFilterCondition = inventoryItemId
+      }
+    }
+
     const where: any = {
       restaurant_id: restaurantId,
       ...branchScope,
-      ...(inventoryItemId && { inventory_item_id: inventoryItemId }),
+      ...(itemFilterCondition && { inventory_item_id: itemFilterCondition }),
       ...(type && { type }),
       ...(orderId && { order_id: orderId }),
     }

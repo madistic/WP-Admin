@@ -227,6 +227,9 @@ export async function deductInventoryForOrder(
     await tx.inventoryTransaction.createMany({
       data: transactionRows,
     })
+
+    // Automatically sync menu items availability for all deducted inventory ingredients (POS + WhatsApp shared state)
+    await syncMenuItemsAvailabilityForInventoryItems(tx, requiredIds)
   }
 
   console.log(`[Inventory Service] Successfully deducted ${transactionRows.length} ingredient(s) for order #${order.order_number}`)
@@ -344,6 +347,12 @@ export async function reverseInventoryForOrder(
     await tx.inventoryTransaction.createMany({
       data: reversalRows,
     })
+
+    // Automatically restore menu items availability if reversed ingredients become sufficient
+    const reversedItemIds = Array.from(new Set(deductions.map((d) => d.inventory_item_id).filter(Boolean)))
+    if (reversedItemIds.length > 0) {
+      await syncMenuItemsAvailabilityForInventoryItems(tx, reversedItemIds)
+    }
   }
 
   console.log(`[Inventory Service] Successfully reversed ${reversalRows.length} ingredient(s) for order #${orderNumber}`)
@@ -431,5 +440,210 @@ export async function recordManualInventoryTransaction(
     },
   })
 
+  // If this was a purchase with cost, recalculate Cost Per Unit using arithmetic average of active purchase entries
+  if (type === "PURCHASE" && resolvedUnitCost !== null) {
+    const activePurchases = await tx.inventoryTransaction.findMany({
+      where: {
+        inventory_item_id: item.id,
+        type: "PURCHASE",
+        unit_cost: { not: null, gt: 0 },
+      },
+      select: {
+        unit_cost: true,
+        reason: true,
+      },
+    })
+    const avgCost = calculateArithmeticAveragePurchaseUnitCost(activePurchases)
+    if (avgCost !== null) {
+      await tx.inventoryItem.update({
+        where: { id: item.id },
+        data: { cost_per_unit: new Prisma.Decimal(avgCost.toFixed(2)) },
+      })
+    }
+  }
+
+  // Automatically sync menu item availability for this inventory item (mark OUT OF STOCK if 0/insufficient, restore if sufficient)
+  await syncMenuItemsAvailabilityForInventoryItems(tx, [item.id])
+
   return { item: updatedItem, transaction }
 }
+
+/**
+ * Calculates arithmetic average unit cost from ACTIVE purchase ledger entries only.
+ * Excludes entries with:
+ * - non-PURCHASE types
+ * - unit_cost <= 0 or null
+ * - voided, reversed, cancelled, or inactive indicators in reason
+ * 
+ * Formula: sum(unit_cost) / count
+ * Explicitly does NOT use total purchase value / total quantity.
+ */
+export function calculateArithmeticAveragePurchaseUnitCost(
+  purchases: Array<{ unit_cost: Prisma.Decimal | number | null; reason?: string | null }>
+): number | null {
+  const activeCosts: number[] = []
+
+  for (const p of purchases) {
+    if (p.unit_cost === null || p.unit_cost === undefined) continue
+    const cost = Number(p.unit_cost)
+    if (isNaN(cost) || cost <= 0) continue
+
+    if (p.reason) {
+      const lower = p.reason.toLowerCase()
+      if (
+        lower.includes("void") ||
+        lower.includes("revers") ||
+        lower.includes("cancel") ||
+        lower.includes("inactive")
+      ) {
+        continue
+      }
+    }
+
+    activeCosts.push(cost)
+  }
+
+  if (activeCosts.length === 0) return null
+
+  const sum = activeCosts.reduce((acc, c) => acc + c, 0)
+  return Number((sum / activeCosts.length).toFixed(2))
+}
+
+/**
+ * Synchronizes menu item availability (is_available) based on inventory ingredient stock.
+ * - When an ingredient reaches 0 or insufficient stock for a menu item recipe, marks menuItem.is_available = false (OUT OF STOCK).
+ * - When all required ingredients have sufficient stock again, restores menuItem.is_available = true.
+ * Shared by both POS and WhatsApp ordering.
+ */
+export async function syncMenuItemsAvailabilityForInventoryItems(
+  db: Prisma.TransactionClient | typeof prisma,
+  inventoryItemIds: string[]
+): Promise<void> {
+  if (!inventoryItemIds || inventoryItemIds.length === 0) return
+
+  const menuItems = await db.menuItem.findMany({
+    where: {
+      ingredients: {
+        some: {
+          inventory_item_id: { in: inventoryItemIds },
+        },
+      },
+      deleted_at: null,
+    },
+    include: {
+      ingredients: {
+        include: {
+          inventoryItem: true,
+        },
+      },
+    },
+  })
+
+  for (const item of menuItems) {
+    if (!item.ingredients || item.ingredients.length === 0) continue
+
+    let hasInsufficient = false
+
+    for (const ing of item.ingredients) {
+      const inv = ing.inventoryItem
+      if (!inv || !inv.is_active) {
+        hasInsufficient = true
+        break
+      }
+
+      const availableStock = Number(inv.quantity)
+      if (availableStock <= 0) {
+        hasInsufficient = true
+        break
+      }
+
+      const requiredStock = convertQuantity(Number(ing.quantity), ing.unit, inv.unit)
+      if (availableStock < requiredStock) {
+        hasInsufficient = true
+        break
+      }
+    }
+
+    const shouldBeAvailable = !hasInsufficient
+
+    if (item.is_available !== shouldBeAvailable) {
+      await db.menuItem.update({
+        where: { id: item.id },
+        data: { is_available: shouldBeAvailable },
+      })
+      console.log(
+        `[Inventory Stock Sync] Menu item "${item.name}" availability updated: ${
+          shouldBeAvailable ? "IN_STOCK (is_available=true)" : "OUT_OF_STOCK (is_available=false)"
+        }`
+      )
+    }
+  }
+}
+
+/**
+ * Synchronizes availability for ALL recipe-linked menu items of a restaurant.
+ */
+export async function syncAllMenuItemsAvailability(
+  db: Prisma.TransactionClient | typeof prisma,
+  restaurantId: string
+): Promise<void> {
+  if (!restaurantId) return
+
+  const menuItems = await db.menuItem.findMany({
+    where: {
+      restaurant_id: restaurantId,
+      ingredients: {
+        some: {},
+      },
+      deleted_at: null,
+    },
+    include: {
+      ingredients: {
+        include: {
+          inventoryItem: true,
+        },
+      },
+    },
+  })
+
+  for (const item of menuItems) {
+    if (!item.ingredients || item.ingredients.length === 0) continue
+
+    let hasInsufficient = false
+
+    for (const ing of item.ingredients) {
+      const inv = ing.inventoryItem
+      if (!inv || !inv.is_active) {
+        hasInsufficient = true
+        break
+      }
+
+      const availableStock = Number(inv.quantity)
+      if (availableStock <= 0) {
+        hasInsufficient = true
+        break
+      }
+
+      const requiredStock = convertQuantity(Number(ing.quantity), ing.unit, inv.unit)
+      if (availableStock < requiredStock) {
+        hasInsufficient = true
+        break
+      }
+    }
+
+    const shouldBeAvailable = !hasInsufficient
+
+    if (item.is_available !== shouldBeAvailable) {
+      await db.menuItem.update({
+        where: { id: item.id },
+        data: { is_available: shouldBeAvailable },
+      })
+      console.log(
+        `[Inventory Stock Sync] Restaurant ${restaurantId} - Menu item "${item.name}" availability updated: ${
+          shouldBeAvailable ? "IN_STOCK" : "OUT_OF_STOCK"
+        }`
+      )
+    }
+  }
+}
+

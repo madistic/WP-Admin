@@ -54,6 +54,33 @@ export default function HistoryPage() {
   const [dateTo, setDateTo] = useState("")
   const [search, setSearch] = useState("")
   const [orderType, setOrderType] = useState("")
+  const [selectedItem, setSelectedItem] = useState("")
+  const [filterItems, setFilterItems] = useState<{
+    menuItems: Array<{ id: string; name: string }>
+    inventoryItems: Array<{ id: string; name: string; unit: string }>
+  }>({ menuItems: [], inventoryItems: [] })
+
+  useEffect(() => {
+    async function loadFilterItems() {
+      try {
+        const [menuRes, invRes] = await Promise.all([
+          fetch("/api/menu"),
+          fetch("/api/inventory/items"),
+        ])
+        const menuData = menuRes.ok ? await menuRes.json() : null
+        const invData = invRes.ok ? await invRes.json() : null
+
+        setFilterItems({
+          menuItems: menuData?.items ? menuData.items.map((i: any) => ({ id: i.id, name: i.name })) : [],
+          inventoryItems: Array.isArray(invData) ? invData.map((inv: any) => ({ id: inv.id, name: inv.name, unit: inv.unit })) : [],
+        })
+      } catch (e) {
+        console.error("Failed to load filter items:", e)
+      }
+    }
+    loadFilterItems()
+  }, [])
+
   const fetchHistory = useCallback(async () => {
     setLoading(true)
     try {
@@ -63,6 +90,7 @@ export default function HistoryPage() {
       if (dateTo) params.set("dateTo", dateTo)
       if (search.trim()) params.set("search", search.trim())
       if (orderType) params.set("orderType", orderType)
+      if (selectedItem) params.set("itemId", selectedItem)
       const res = await fetch(`/api/orders/history?${params.toString()}`)
       if (res.ok) {
         const data = await res.json()
@@ -74,7 +102,7 @@ export default function HistoryPage() {
     } finally {
       setLoading(false)
     }
-  }, [status, dateFrom, dateTo, search, orderType])
+  }, [status, dateFrom, dateTo, search, orderType, selectedItem])
 
   useEffect(() => {
     fetchHistory()
@@ -137,6 +165,32 @@ export default function HistoryPage() {
           />
         </div>
 
+        {/* Item */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Item</label>
+          <select
+            value={selectedItem}
+            onChange={(e) => setSelectedItem(e.target.value)}
+            className="text-xs border border-slate-300 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[200px]"
+          >
+            <option value="">All Items</option>
+            {filterItems.menuItems.length > 0 && (
+              <optgroup label="Menu Items">
+                {filterItems.menuItems.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {filterItems.inventoryItems.length > 0 && (
+              <optgroup label="Inventory Items">
+                {filterItems.inventoryItems.map((inv) => (
+                  <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+        </div>
+
         {/* Search */}
         <div className="flex flex-col gap-1 flex-1 min-w-[180px]">
           <label className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Search</label>
@@ -151,7 +205,7 @@ export default function HistoryPage() {
         </div>
 
         <button
-          onClick={() => { setStatus(""); setOrderType(""); setDateFrom(""); setDateTo(""); setSearch("") }}
+          onClick={() => { setStatus(""); setOrderType(""); setSelectedItem(""); setDateFrom(""); setDateTo(""); setSearch("") }}
           className="text-xs font-medium text-slate-500 hover:text-slate-700 px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
         >
           Clear

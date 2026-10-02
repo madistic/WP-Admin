@@ -4,6 +4,7 @@ import { getDefaultBranchId } from "@/lib/branch-scope"
 import type { DeliveryQuoteResult } from "@/lib/whatsapp/delivery"
 import { calculateRedemption, redeemPointsTransaction } from "@/lib/loyalty"
 import { sendPushToRestaurant } from "@/lib/webpush"
+import { syncAllMenuItemsAvailability } from "@/lib/inventory/service"
 
 export interface CartItemAddOptions {
   variantId?: string
@@ -203,6 +204,8 @@ export async function addToCart(
   menuItemId: string,
   options?: CartItemAddOptions
 ): Promise<{ success: boolean; cart?: FormattedCartSummary; error?: string }> {
+  await syncAllMenuItemsAvailability(prisma, restaurantId)
+
   const menuItem = await prisma.menuItem.findFirst({
     where: {
       id: menuItemId,
@@ -586,6 +589,8 @@ export async function validateCartForCheckout(
   restaurantId: string,
   customerWhatsappNumber: string
 ): Promise<{ valid: boolean; error?: string }> {
+  await syncAllMenuItemsAvailability(prisma, restaurantId)
+
   const cart = await getOrCreateCart(restaurantId, customerWhatsappNumber)
 
   if (cart.items.length === 0) {

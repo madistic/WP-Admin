@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client"
 import prisma from "@/lib/prisma"
+import { syncAllMenuItemsAvailability } from "@/lib/inventory/service"
 
 export interface GetMenuItemsOptions {
   categoryId?: string
@@ -33,6 +34,8 @@ export async function cleanupExpiredSpecials(restaurantId: string): Promise<void
  */
 export async function getMenuCategories(restaurantId: string) {
   if (!restaurantId) return []
+
+  await syncAllMenuItemsAvailability(prisma, restaurantId)
 
   return await prisma.menuCategory.findMany({
     where: {
@@ -74,6 +77,7 @@ export async function getMenuItems(restaurantId: string, options: GetMenuItemsOp
   if (!restaurantId) return []
 
   await cleanupExpiredSpecials(restaurantId)
+  await syncAllMenuItemsAvailability(prisma, restaurantId)
 
   const whereClause: Prisma.MenuItemWhereInput = {
     restaurant_id: restaurantId,

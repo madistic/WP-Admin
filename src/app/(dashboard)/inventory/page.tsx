@@ -89,6 +89,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | "low_stock" | "out_of_stock" | "inactive">("all")
   const [ledgerTypeFilter, setLedgerTypeFilter] = useState<string>("ALL")
+  const [ledgerItemFilter, setLedgerItemFilter] = useState<string>("")
 
   // Modals state
   const [isItemModalOpen, setIsItemModalOpen] = useState(false)
@@ -139,6 +140,9 @@ export default function InventoryPage() {
       if (ledgerTypeFilter !== "ALL") {
         url += `&type=${ledgerTypeFilter}`
       }
+      if (ledgerItemFilter) {
+        url += `&inventory_item_id=${encodeURIComponent(ledgerItemFilter)}`
+      }
       const res = await fetch(url)
       if (res.ok) {
         const data = await res.json()
@@ -157,7 +161,7 @@ export default function InventoryPage() {
     if (activeTab === "ledger") {
       fetchTransactions()
     }
-  }, [activeTab, ledgerTypeFilter])
+  }, [activeTab, ledgerTypeFilter, ledgerItemFilter])
 
   // Summary Metrics
   const totalItemsCount = items.length
@@ -610,6 +614,23 @@ export default function InventoryPage() {
                   {btn.label}
                 </button>
               ))}
+
+              {/* Item Filter */}
+              <div className="flex items-center gap-1.5 ml-2 border-l border-slate-200 pl-3">
+                <span className="text-xs font-medium text-slate-500">Item:</span>
+                <select
+                  value={ledgerItemFilter}
+                  onChange={(e) => setLedgerItemFilter(e.target.value)}
+                  className="text-xs border border-slate-300 rounded-lg px-2.5 py-1 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-700 font-medium"
+                >
+                  <option value="">All Items</option>
+                  {items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.unit})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <button

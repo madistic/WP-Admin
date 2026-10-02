@@ -1,11 +1,17 @@
 import Link from "next/link"
 import prisma from "@/lib/prisma"
+import { syncAllMenuItemsAvailability } from "@/lib/inventory/service"
 import { createTestOrder, appendItemsToPosOrder, completePosOrder, deletePosOrder, updatePosOrderItem } from "./actions"
 import DevCreateOrderForm from "./DevCreateOrderForm"
 
 export const dynamic = "force-dynamic"
 
 export default async function DevCreateOrderPage() {
+  const allRestaurants = await prisma.restaurant.findMany({ select: { id: true } })
+  for (const r of allRestaurants) {
+    await syncAllMenuItemsAvailability(prisma, r.id)
+  }
+
   const restaurants = await prisma.restaurant.findMany({
     include: {
       categories: {
